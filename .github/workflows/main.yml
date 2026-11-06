@@ -1,0 +1,85 @@
+name: Build DirectionalCombat
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  COMMONLIB_REPO: https://github.com/alandtse/CommonLibSSE-NG.git
+  COMMONLIB_REF: v15.6.0
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pobierz CommonLibSSE-NG
+        shell: pwsh
+        run: |
+          if (-not (Test-Path lib/commonlibsse-ng/xmake.lua)) {
+            git clone --depth 1 --branch $env:COMMONLIB_REF --recurse-submodules --shallow-submodules $env:COMMONLIB_REPO lib/commonlibsse-ng
+          }
+
+      - name: Zainstaluj xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+          actions-cache-folder: .xmake-cache
+
+      - name: Cache pakietów xmake
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/xmake-packages
+          key: xmake-pkgs-${{ env.COMMONLIB_REF }}-${{ hashFiles('xmake.lua') }}
+          restore-keys: xmake-pkgs-${{ env.COMMONLIB_REF }}-
+
+      - name: Konfiguracja
+        shell: pwsh
+        run: |
+          $env:XMAKE_PKG_INSTALLDIR = "${{ runner.temp }}/xmake-packages"
+          xmake f -m releasedbg -a x64 -y -v
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $env:XMAKE_PKG_INSTALLDIR = "${{ runner.temp }}/xmake-packages"
+          xmake build -y -v DirectionalCombat
+
+      - name: Spakuj moda
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem build -Recurse -Filter DirectionalCombat.dll | Select-Object -First 1
+          $pdb = Get-ChildItem build -Recurse -Filter DirectionalCombat.pdb | Select-Object -First 1
+          if (-not $dll) { throw "Nie znaleziono DirectionalCombat.dll" }
+          $out = "package/SKSE/Plugins"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item $dll.FullName $out
+          Copy-Item dist/SKSE/Plugins/DirectionalCombat.ini $out
+          Compress-Archive -Path package/* -DestinationPath DirectionalCombat.zip -Force
+          New-Item -ItemType Directory -Force -Path symbols | Out-Null
+          if ($pdb) { Copy-Item $pdb.FullName symbols }
+
+      - name: Artefakt – mod
+        uses: actions/upload-artifact@v4
+        with:
+          name: DirectionalCombat
+          path: package/
+
+      - name: Artefakt – symbole (debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DirectionalCombat-pdb
+          path: symbols/
+
+      - name: Release (dla tagów v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DirectionalCombat.zip
