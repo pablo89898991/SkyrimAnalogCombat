@@ -10,10 +10,11 @@ set_encodings("utf-8")
 
 add_rules("mode.releasedbg", "mode.debug")
 
--- Tylko SE + AE (bez VR – inne indeksy vtable i inna obsługa wejścia)
+-- Wszystkie runtime'y włączone, bo tak jest zbudowana gotowa (prebuilt) CommonLibSSE-NG.
+-- Wtyczka sama wyłącza się w Skyrim VR (patrz main.cpp).
 set_config("skyrim_se", true)
 set_config("skyrim_ae", true)
-set_config("skyrim_vr", false)
+set_config("skyrim_vr", true)
 
 includes("lib/commonlibsse-ng")
 
