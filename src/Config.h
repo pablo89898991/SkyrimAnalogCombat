@@ -2,72 +2,65 @@
 
 #include "PCH.h"
 
-// Kierunek ZAMACHU (strona, na którą odciągnąłeś broń).
-// Cios leci w przeciwną stronę: zamach w prawo -> cięcie z prawej do lewej.
-enum class Dir : std::uint8_t
-{
-	Left = 0,
-	Right = 1,
-	Up = 2,
-	Down = 3,
-	Count
-};
-
-constexpr std::string_view DirName(Dir d)
-{
-	switch (d) {
-	case Dir::Left:
-		return "Left";
-	case Dir::Right:
-		return "Right";
-	case Dir::Up:
-		return "Up";
-	case Dir::Down:
-		return "Down";
-	default:
-		return "?";
-	}
-}
+// Kierunki liczone jako kąt zamachu, przeciwnie do ruchu wskazówek zegara:
+//   0° = w prawo, 90° = w górę, 180° = w lewo, 270° = w dół.
+// Cios leci w przeciwną stronę: zamach w prawo-górę -> cięcie ukośne w lewo-dół.
+//
+// Wewnętrznie zawsze 16 sektorów po 22.5° (indeks 0..15, 0 = prawo, 4 = góra, 8 = lewo, 12 = dół).
+// Ustawienie Directions = 4 / 8 / 16 decyduje, z jaką rozdzielczością gest jest "zatrzaskiwany".
+inline constexpr int kMaxSectors = 16;
 
 struct Config
 {
 	// [General]
 	bool enabled = true;
-	bool freezeCamera = true;        // kamera stoi w miejscu, gdy trzymasz LPM
-	bool chainStrikes = true;        // po ciosie można od razu wziąć kolejny zamach (bez puszczania LPM)
-	bool strikeOnRelease = true;     // puszczenie LPM po zamachu też wyprowadza cios
-	bool tapForNormalAttack = true;  // krótkie kliknięcie bez ruchu = zwykły atak
+	bool freezeCamera = true;
+	bool chainStrikes = true;
+	bool strikeOnRelease = true;
+	bool tapForNormalAttack = true;
 	bool debugLog = false;
+	int  directions = 16;  // 4, 8 albo 16
 
 	// [Mouse]
-	float mouseWindupThreshold = 80.0f;   // ile "pikseli" ruchu myszy, żeby uzbroić zamach
-	float mouseStrikeThreshold = 50.0f;   // ile ruchu w przeciwną stronę, żeby wyprowadzić cios
+	float mouseWindupThreshold = 80.0f;
+	float mouseStrikeThreshold = 50.0f;
 	float mouseSensitivity = 1.0f;
-	bool invertY = false;
+	bool  invertY = false;
 
-	// [Gamepad] (prawy drążek, trzymając prawy spust)
-	bool gamepadEnabled = true;
+	// [Gamepad]
+	bool  gamepadEnabled = true;
 	float stickWindup = 0.70f;
 	float stickStrike = 0.50f;
 
 	// [Timing]
-	float strikeCooldown = 0.30f;  // s, blokada po ciosie zanim można uzbroić kolejny
-	float tapMaxTime = 0.25f;      // s, maksymalny czas "kliknięcia"
+	float strikeCooldown = 0.30f;
+	float tapMaxTime = 0.25f;
 
-	// [Animations] – zdarzenia grafu animacji wysyłane dla każdego kierunku zamachu
-	std::array<std::string, static_cast<std::size_t>(Dir::Count)> events{
-		"attackPowerStartLeft",     // zamach w lewo  -> cięcie w prawo
-		"attackPowerStartRight",    // zamach w prawo -> cięcie w lewo
-		"attackPowerStartForward",  // zamach w górę  -> cios z góry
-		"attackPowerStartInPlace"   // zamach w dół   -> cios od dołu / pchnięcie
-	};
+	// [Animations]
+	// Animacje "bazowe" dla 4 głównych kierunków – używane, gdy dany kąt nie ma własnej animacji.
+	std::string windupRight = "attackPowerStartRight";
+	std::string windupUp = "attackPowerStartForward";
+	std::string windupLeft = "attackPowerStartLeft";
+	std::string windupDown = "attackPowerStartInPlace";
+	// Opcjonalne animacje dla każdego z 16 kątów (puste = najbliższa bazowa).
+	std::array<std::string, kMaxSectors> sectorEvents{};
 	std::string normalAttackEvent = "attackStart";
-	std::string fallbackEvent = "attackStart";  // gdy kierunkowe się nie uda (np. brak staminy)
-	bool swapLeftRight = false;
+	std::string fallbackEvent = "attackStart";
+	bool        swapLeftRight = false;
 
-	// [Integration] – zapis kierunku do wartości aktora (np. dla warunków OAR)
-	std::string directionActorValue = "";  // np. "Variable09"; puste = wyłączone
+	// [Integration]
+	std::string    directionActorValue = "";  // 1..16 = sektor zamachu (1 = prawo, 5 = góra, 9 = lewo, 13 = dół)
 	RE::ActorValue directionAV = RE::ActorValue::kNone;
+	std::string    angleActorValue = "";  // kąt zamachu w stopniach 0..360 (pełny analog)
+	RE::ActorValue angleAV = RE::ActorValue::kNone;
+
+	// [FloatingWeapon] – tylko 1. osoba
+	bool  hideArms = true;              // ukryj ręce/rękawice, widać samą broń
+	bool  hideArmsOnlyWhenDrawn = true; // ukrywaj tylko z wyjętą bronią białą
+	bool  followAim = true;             // broń podąża za myszą podczas zamachu
+	float maxOffset = 12.0f;            // maks. przesunięcie broni (jednostki gry)
+	float maxTilt = 25.0f;              // maks. przechył broni (stopnie); ujemne = odwrotnie
+	float smoothing = 12.0f;            // szybkość wygładzania ruchu (1/s)
 
 	static Config& Get()
 	{
@@ -76,4 +69,7 @@ struct Config
 	}
 
 	void Load();
+
+	// Nazwa klucza INI dla sektora 0..15, np. "Windup_022" dla 22.5°.
+	static std::string SectorKey(int a_sector16);
 };

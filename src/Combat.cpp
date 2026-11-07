@@ -1,26 +1,94 @@
 #include "Combat.h"
 
-Dir Combat::Snap(const Vec& a_v)
+namespace
 {
-	if (std::abs(a_v.x) >= std::abs(a_v.y)) {
-		return a_v.x >= 0.0f ? Dir::Right : Dir::Left;
+	constexpr float kPi = 3.14159265358979f;
+	constexpr float kSectorDeg = 360.0f / kMaxSectors;  // 22.5°
+
+	// Opis sektora do logu, np. "67.5° (prawo-góra)"
+	std::string Describe(int a_sector16)
+	{
+		static constexpr std::array<const char*, kMaxSectors> names{
+			"prawo", "prawo-prawo-góra", "prawo-góra", "góra-góra-prawo",
+			"góra", "góra-góra-lewo", "lewo-góra", "lewo-lewo-góra",
+			"lewo", "lewo-lewo-dół", "lewo-dół", "dół-dół-lewo",
+			"dół", "dół-dół-prawo", "prawo-dół", "prawo-prawo-dół"
+		};
+		return std::format("{:.1f}° ({})", a_sector16 * kSectorDeg, names[static_cast<std::size_t>(a_sector16)]);
 	}
-	return a_v.y >= 0.0f ? Dir::Up : Dir::Down;
 }
 
-Combat::Vec Combat::Unit(Dir a_d)
+float Combat::AngleDeg(const Vec& a_v)
 {
-	switch (a_d) {
-	case Dir::Left:
-		return { -1.0f, 0.0f };
-	case Dir::Right:
-		return { 1.0f, 0.0f };
-	case Dir::Up:
-		return { 0.0f, 1.0f };
-	case Dir::Down:
-	default:
-		return { 0.0f, -1.0f };
+	float deg = std::atan2(a_v.y, a_v.x) * 180.0f / kPi;
+	if (deg < 0.0f) {
+		deg += 360.0f;
 	}
+	return deg;
+}
+
+Combat::Vec Combat::FromAngle(float a_deg)
+{
+	const float r = a_deg * kPi / 180.0f;
+	return { std::cos(r), std::sin(r) };
+}
+
+int Combat::Sector16(float a_deg)
+{
+	const int   n = Config::Get().directions;  // 4 / 8 / 16
+	const float step = 360.0f / static_cast<float>(n);
+	const int   s = static_cast<int>(std::lround(a_deg / step)) % n;
+	return s * (kMaxSectors / n);
+}
+
+const std::string& Combat::EventFor(int a_sector16)
+{
+	const auto& cfg = Config::Get();
+
+	int s = a_sector16;
+	if (cfg.swapLeftRight) {
+		s = (kMaxSectors / 2 - s + kMaxSectors) % kMaxSectors;  // lustro poziome: kąt -> 180° - kąt
+	}
+
+	// 1) własna animacja dla tego kąta
+	if (const auto& ev = cfg.sectorEvents[static_cast<std::size_t>(s)]; !ev.empty()) {
+		return ev;
+	}
+
+	// 2) najbliższa z 4 bazowych; skosy (dokładnie 45°) idą do cięć poziomych,
+	//    bo wyglądają bardziej jak ukośne cięcie niż cios z góry.
+	const Vec v = FromAngle(s * kSectorDeg);
+	if (std::abs(v.x) + 0.001f >= std::abs(v.y)) {
+		return v.x >= 0.0f ? cfg.windupRight : cfg.windupLeft;
+	}
+	return v.y >= 0.0f ? cfg.windupUp : cfg.windupDown;
+}
+
+Combat::Aim Combat::GetAim() const
+{
+	if (_state != State::Charging && _state != State::Armed) {
+		return {};
+	}
+
+	const auto& cfg = Config::Get();
+	Vec v{};
+	if (_gamepad) {
+		v = _stick;
+	} else {
+		v = { _windup.x / cfg.mouseWindupThreshold, _windup.y / cfg.mouseWindupThreshold };
+		if (_state == State::Armed) {
+			// szarpnięcie w drugą stronę "ciągnie" broń z powrotem do środka
+			const float back = std::clamp(_reverse / cfg.mouseStrikeThreshold, 0.0f, 1.0f);
+			v.x *= 1.0f - back;
+			v.y *= 1.0f - back;
+		}
+	}
+
+	if (const float len = v.Len(); len > 1.0f) {
+		v.x /= len;
+		v.y /= len;
+	}
+	return { v.x, v.y };
 }
 
 bool Combat::CanUseDirectionalCombat()
@@ -60,6 +128,7 @@ void Combat::Begin(bool a_gamepad)
 	_gamepad = a_gamepad;
 	_movedAtAll = false;
 	_windup = {};
+	_stick = {};
 	_reverse = 0.0f;
 	_pressTime = Clock::now();
 	_struckOnce = false;
@@ -73,13 +142,15 @@ void Combat::Reset()
 	_reverse = 0.0f;
 }
 
-void Combat::Arm(Dir a_dir)
+void Combat::Arm(float a_deg)
 {
-	if (_state != State::Armed || _dir != a_dir) {
-		logger::debug("Gest: zamach {}", DirName(a_dir));
+	const int sector = Sector16(a_deg);
+	if (_state != State::Armed || sector != _sector) {
+		logger::debug("Gest: zamach {} (kąt surowy {:.1f}°)", Describe(sector), a_deg);
 	}
 	_state = State::Armed;
-	_dir = a_dir;
+	_angle = a_deg;
+	_sector = sector;
 }
 
 void Combat::Strike()
@@ -91,22 +162,16 @@ void Combat::Strike()
 		return;
 	}
 
-	Dir animDir = _dir;
-	if (cfg.swapLeftRight) {
-		if (animDir == Dir::Left) {
-			animDir = Dir::Right;
-		} else if (animDir == Dir::Right) {
-			animDir = Dir::Left;
-		}
-	}
-
 	auto* av = player->AsActorValueOwner();
 	if (cfg.directionAV != RE::ActorValue::kNone) {
-		// 1=Left 2=Right 3=Up 4=Down (0 = brak) – do użycia w warunkach OAR/DAR
-		av->SetActorValue(cfg.directionAV, static_cast<float>(static_cast<int>(_dir) + 1));
+		// 1..16: 1 = prawo, 5 = góra, 9 = lewo, 13 = dół (przeciwnie do wskazówek zegara)
+		av->SetActorValue(cfg.directionAV, static_cast<float>(_sector + 1));
+	}
+	if (cfg.angleAV != RE::ActorValue::kNone) {
+		av->SetActorValue(cfg.angleAV, _angle);
 	}
 
-	const auto& ev = cfg.events[static_cast<std::size_t>(animDir)];
+	const auto& ev = EventFor(_sector);
 	const bool  hasStamina = av->GetActorValue(RE::ActorValue::kStamina) > 0.0f;
 
 	bool ok = false;
@@ -115,9 +180,9 @@ void Combat::Strike()
 	}
 	if (!ok && !cfg.fallbackEvent.empty()) {
 		ok = player->NotifyAnimationGraph(cfg.fallbackEvent.c_str());
-		logger::debug("Gest: cios {} -> fallback '{}' ({})", DirName(_dir), cfg.fallbackEvent, ok ? "ok" : "odrzucony");
+		logger::debug("Gest: cios z {} -> fallback '{}' ({})", Describe(_sector), cfg.fallbackEvent, ok ? "ok" : "odrzucony");
 	} else {
-		logger::debug("Gest: cios {} -> '{}' ({})", DirName(_dir), ev, ok ? "ok" : "odrzucony");
+		logger::debug("Gest: cios z {} -> '{}' ({})", Describe(_sector), ev, ok ? "ok" : "odrzucony");
 	}
 
 	AfterStrike();
@@ -205,20 +270,20 @@ bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 		_windup.x += d.x;
 		_windup.y += d.y;
 		if (_windup.Len() >= cfg.mouseWindupThreshold) {
-			Arm(Snap(_windup));
 			_reverse = 0.0f;
+			Arm(AngleDeg(_windup));
 		}
 		break;
 
 	case State::Armed:
 		{
-			const float along = d.Dot(Unit(_dir));
+			const float along = d.Dot(FromAngle(_angle));
 			if (along >= 0.0f) {
-				// dalej w stronę zamachu (albo w bok) – pozwala korygować kierunek
+				// dalej w stronę zamachu albo w bok – broń "jedzie" po okręgu
 				_windup.x += d.x;
 				_windup.y += d.y;
-				_reverse = std::max(0.0f, _reverse - along);
-				Arm(Snap(_windup));
+				_reverse = (std::max)(0.0f, _reverse - along);
+				Arm(AngleDeg(_windup));
 			} else {
 				_reverse += -along;
 				if (_reverse >= cfg.mouseStrikeThreshold) {
@@ -243,6 +308,7 @@ bool Combat::OnRightStick(float a_x, float a_y)
 
 	const auto& cfg = Config::Get();
 	const Vec   v{ a_x, a_y };
+	_stick = v;
 
 	if (v.Len() > 0.2f) {
 		_movedAtAll = true;
@@ -255,17 +321,17 @@ bool Combat::OnRightStick(float a_x, float a_y)
 	switch (_state) {
 	case State::Charging:
 		if (v.Len() >= cfg.stickWindup) {
-			Arm(Snap(v));
+			Arm(AngleDeg(v));
 		}
 		break;
 
 	case State::Armed:
 		{
-			const float along = v.Dot(Unit(_dir));
+			const float along = v.Dot(FromAngle(_angle));
 			if (along <= -cfg.stickStrike) {
 				Strike();
 			} else if (v.Len() >= cfg.stickWindup && along > 0.0f) {
-				Arm(Snap(v));
+				Arm(AngleDeg(v));  // drążek po okręgu = płynna zmiana kąta
 			}
 		}
 		break;

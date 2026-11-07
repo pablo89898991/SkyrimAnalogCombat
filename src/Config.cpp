@@ -69,6 +69,16 @@ namespace
 				}
 			}
 		}
+		void Get(const char* a_key, int& a_out) const
+		{
+			if (const auto it = ini.find(a_key); it != ini.end()) {
+				try {
+					a_out = std::stoi(it->second);
+				} catch (...) {
+					logger::warn("Niepoprawna liczba dla {}: '{}'", a_key, it->second);
+				}
+			}
+		}
 		void Get(const char* a_key, std::string& a_out) const
 		{
 			if (const auto it = ini.find(a_key); it != ini.end()) {
@@ -106,25 +116,49 @@ void Config::Load()
 	r.Get("timing.strikecooldown", strikeCooldown);
 	r.Get("timing.tapmaxtime", tapMaxTime);
 
-	r.Get("animations.windupleft", events[static_cast<std::size_t>(Dir::Left)]);
-	r.Get("animations.windupright", events[static_cast<std::size_t>(Dir::Right)]);
-	r.Get("animations.windupup", events[static_cast<std::size_t>(Dir::Up)]);
-	r.Get("animations.windupdown", events[static_cast<std::size_t>(Dir::Down)]);
+	r.Get("animations.windupright", windupRight);
+	r.Get("animations.windupup", windupUp);
+	r.Get("animations.windupleft", windupLeft);
+	r.Get("animations.windupdown", windupDown);
+	for (int i = 0; i < kMaxSectors; ++i) {
+		const auto key = "animations." + Lower(SectorKey(i));
+		r.Get(key.c_str(), sectorEvents[static_cast<std::size_t>(i)]);
+	}
 	r.Get("animations.normalattack", normalAttackEvent);
 	r.Get("animations.fallback", fallbackEvent);
 	r.Get("animations.swapleftright", swapLeftRight);
 
-	r.Get("integration.directionactorvalue", directionActorValue);
-	directionAV = RE::ActorValue::kNone;
-	if (!directionActorValue.empty()) {
-		directionAV = RE::ActorValueList::LookupActorValueByName(directionActorValue.c_str());
-		if (directionAV == RE::ActorValue::kNone) {
-			logger::warn("Nieznana wartość aktora '{}' – integracja wyłączona", directionActorValue);
+	const auto lookupAV = [](const std::string& a_name) {
+		if (a_name.empty()) {
+			return RE::ActorValue::kNone;
 		}
+		const auto av = RE::ActorValueList::LookupActorValueByName(a_name.c_str());
+		if (av == RE::ActorValue::kNone) {
+			logger::warn("Nieznana wartość aktora '{}' – ta integracja wyłączona", a_name);
+		}
+		return av;
+	};
+	r.Get("integration.directionactorvalue", directionActorValue);
+	r.Get("integration.angleactorvalue", angleActorValue);
+	directionAV = lookupAV(directionActorValue);
+	angleAV = lookupAV(angleActorValue);
+
+	r.Get("floatingweapon.hidearms", hideArms);
+	r.Get("floatingweapon.hidearmsonlywhendrawn", hideArmsOnlyWhenDrawn);
+	r.Get("floatingweapon.followaim", followAim);
+	r.Get("floatingweapon.maxoffset", maxOffset);
+	r.Get("floatingweapon.maxtilt", maxTilt);
+	r.Get("floatingweapon.smoothing", smoothing);
+	smoothing = (std::max)(0.1f, smoothing);
+
+	r.Get("general.directions", directions);
+	if (directions != 4 && directions != 8 && directions != 16) {
+		logger::warn("Directions={} nieobsługiwane (dozwolone 4/8/16) – ustawiam 16", directions);
+		directions = 16;
 	}
 
-	mouseWindupThreshold = std::max(1.0f, mouseWindupThreshold);
-	mouseStrikeThreshold = std::max(1.0f, mouseStrikeThreshold);
+	mouseWindupThreshold = (std::max)(1.0f, mouseWindupThreshold);
+	mouseStrikeThreshold = (std::max)(1.0f, mouseStrikeThreshold);
 	stickWindup = std::clamp(stickWindup, 0.1f, 1.0f);
 	stickStrike = std::clamp(stickStrike, 0.1f, 1.0f);
 
@@ -133,6 +167,15 @@ void Config::Load()
 		spdlog::flush_on(spdlog::level::debug);
 	}
 
-	logger::info("Konfiguracja: enabled={} freezeCamera={} chain={} windup={} strike={} gamepad={}",
-		enabled, freezeCamera, chainStrikes, mouseWindupThreshold, mouseStrikeThreshold, gamepadEnabled);
+	logger::info("Konfiguracja: enabled={} directions={} freezeCamera={} chain={} windup={} strike={} gamepad={}",
+		enabled, directions, freezeCamera, chainStrikes, mouseWindupThreshold, mouseStrikeThreshold, gamepadEnabled);
+}
+
+std::string Config::SectorKey(int a_sector16)
+{
+	// 0 -> "Windup_000", 1 -> "Windup_022", 2 -> "Windup_045", ... 15 -> "Windup_337"
+	const int deg = static_cast<int>(a_sector16 * 22.5f);
+	char buf[16]{};
+	std::snprintf(buf, sizeof(buf), "Windup_%03d", deg);
+	return buf;
 }
