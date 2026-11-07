@@ -1,5 +1,6 @@
 #include "Config.h"
 #include "Hooks.h"
+#include "Visual.h"
 
 namespace
 {
@@ -18,7 +19,13 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 
 	logger::info("DirectionalCombat {} – ładowanie", SKSE::GetPluginVersion().string());
 
+	if (REL::Module::IsVR()) {
+		logger::warn("Skyrim VR nie jest obsługiwany – wtyczka nic nie robi");
+		return true;
+	}
+
 	Hooks::Install();
+	Visual::Install();
 
 	if (auto* messaging = SKSE::GetMessagingInterface()) {
 		messaging->RegisterListener(OnMessage);
