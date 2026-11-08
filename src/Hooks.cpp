@@ -91,11 +91,12 @@ namespace Hooks
 		// (do przypisania w ustawieniach sterowania).
 		using ActivateButton_t = void(RE::ActivateHandler*, RE::ButtonEvent*, RE::PlayerControlsData*);
 		ActivateButton_t* _ActivateProcessButton = nullptr;
+		bool              g_grabInjecting = false;  // zdarzenie z naszego klawisza podnoszenia – przepuść
 
 		void ActivateProcessButton(RE::ActivateHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
 		{
 			auto* ue = RE::UserEvents::GetSingleton();
-			if (a_event && ue && Config::Get().enabled && Config::Get().disableHoldToGrab && a_event->QUserEvent() == ue->activate) {
+			if (a_event && ue && !g_grabInjecting && Config::Get().enabled && Config::Get().disableHoldToGrab && a_event->QUserEvent() == ue->activate) {
 				if (a_event->IsHeld()) {
 					return;  // trzymanie E – ignorujemy (bez podnoszenia)
 				}
@@ -111,6 +112,61 @@ namespace Hooks
 			}
 			_ActivateProcessButton(a_this, a_event, a_data);
 		}
+
+		// ---- własny klawisz podnoszenia ----
+		// Gra (PC) nie ma osobnej akcji podnoszenia w menu sterowania – podnoszenie to
+		// "przytrzymane E". Klawisz z [Activate] GrabKey udaje przed grą przytrzymane E
+		// (tylko dla podnoszenia), więc działa jej własny mechanizm chwytania.
+		void HandleGrabKey(RE::ButtonEvent* a_event)
+		{
+			const auto& cfg = Config::Get();
+			auto*       ui = RE::UI::GetSingleton();
+			auto*       controls = RE::PlayerControls::GetSingleton();
+			auto*       ue = RE::UserEvents::GetSingleton();
+			auto*       cmap = RE::ControlMap::GetSingleton();
+			if (!cfg.enabled || !cfg.disableHoldToGrab || cfg.grabCode == 0 || !ui || ui->GameIsPaused() || !controls || !ue ||
+				!_ActivateProcessButton || (cmap && !cmap->IsActivateControlsEnabled())) {
+				return;
+			}
+			auto* handler = controls->GetActivateHandler();
+			if (!handler) {
+				return;
+			}
+
+			const RE::BSFixedString saved = a_event->QUserEvent();
+			a_event->SetUserEvent(ue->activate);
+			g_grabInjecting = true;
+			_ActivateProcessButton(handler, a_event, &controls->data);
+			g_grabInjecting = false;
+			a_event->SetUserEvent(saved);
+		}
+
+		class GrabKeySink : public RE::BSTEventSink<RE::InputEvent*>
+		{
+		public:
+			static GrabKeySink* Get()
+			{
+				static GrabKeySink s;
+				return &s;
+			}
+
+			RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
+			{
+				const auto& cfg = Config::Get();
+				for (auto* e = a_event ? *a_event : nullptr; e; e = e->next) {
+					if (e->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) {
+						continue;
+					}
+					auto*      b = e->AsButtonEvent();
+					const auto device = b ? b->GetDevice() : RE::INPUT_DEVICES::kNone;
+					const bool deviceOk = cfg.grabIsMouse ? device == RE::INPUT_DEVICES::kMouse : device == RE::INPUT_DEVICES::kKeyboard;
+					if (b && deviceOk && b->GetIDCode() == cfg.grabCode) {
+						HandleGrabKey(b);
+					}
+				}
+				return RE::BSEventNotifyControl::kContinue;
+			}
+		};
 
 		// ---- LookHandler::ProcessMouseMove ----
 		using ProcessMouseMove_t = void(RE::LookHandler*, RE::MouseMoveEvent*, RE::PlayerControlsData*);
@@ -153,6 +209,15 @@ namespace Hooks
 				}
 			}
 			_LookProcessThumbstick(a_this, a_event, a_data);
+		}
+	}
+
+	void RegisterInput()
+	{
+		if (auto* input = RE::BSInputDeviceManager::GetSingleton()) {
+			input->AddEventSink(GrabKeySink::Get());
+			logger::info("Klawisz podnoszenia: '{}' (kod {:#x}{})", Config::Get().grabKey, Config::Get().grabCode,
+				Config::Get().grabIsMouse ? ", mysz" : "");
 		}
 	}
 

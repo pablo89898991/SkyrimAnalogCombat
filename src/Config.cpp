@@ -107,6 +107,11 @@ void Config::Load()
 	r.Get("mouse.windupthreshold", mouseWindupThreshold);
 	r.Get("mouse.strikethreshold", mouseStrikeThreshold);
 	r.Get("mouse.strikeminspeed", strikeMinSpeed);
+	r.Get("mouse.strikeflickgap", strikeFlickGap);
+	r.Get("mouse.deadzone", mouseDeadZone);
+	r.Get("gamepad.stickdeadzone", stickDeadZone);
+	mouseDeadZone = (std::max)(0.0f, mouseDeadZone);
+	stickDeadZone = std::clamp(stickDeadZone, 0.0f, 0.9f);
 	r.Get("mouse.chainwindupmult", chainWindupMult);
 	r.Get("mouse.sensitivity", mouseSensitivity);
 	r.Get("mouse.inverty", invertY);
@@ -151,6 +156,36 @@ void Config::Load()
 	r.Get("floatingweapon.hidearmsonlywhendrawn", hideArmsOnlyWhenDrawn);
 	r.Get("general.livereload", liveReload);
 	r.Get("activate.disableholdtograb", disableHoldToGrab);
+	r.Get("activate.grabkey", grabKey);
+	{
+		// nazwa klawisza -> kod DirectInput (klawiatura) albo numer przycisku myszy
+		static const std::unordered_map<std::string, std::uint32_t> keys{
+			{ "q", 0x10 }, { "w", 0x11 }, { "e", 0x12 }, { "r", 0x13 }, { "t", 0x14 }, { "y", 0x15 }, { "u", 0x16 },
+			{ "i", 0x17 }, { "o", 0x18 }, { "p", 0x19 }, { "a", 0x1E }, { "s", 0x1F }, { "d", 0x20 }, { "f", 0x21 },
+			{ "g", 0x22 }, { "h", 0x23 }, { "j", 0x24 }, { "k", 0x25 }, { "l", 0x26 }, { "z", 0x2C }, { "x", 0x2D },
+			{ "c", 0x2E }, { "v", 0x2F }, { "b", 0x30 }, { "n", 0x31 }, { "m", 0x32 },
+			{ "1", 0x02 }, { "2", 0x03 }, { "3", 0x04 }, { "4", 0x05 }, { "5", 0x06 }, { "6", 0x07 }, { "7", 0x08 },
+			{ "8", 0x09 }, { "9", 0x0A }, { "0", 0x0B },
+			{ "f1", 0x3B }, { "f2", 0x3C }, { "f3", 0x3D }, { "f4", 0x3E }, { "f5", 0x3F }, { "f6", 0x40 },
+			{ "f7", 0x41 }, { "f8", 0x42 }, { "f9", 0x43 }, { "f10", 0x44 }, { "f11", 0x57 }, { "f12", 0x58 },
+			{ "leftalt", 0x38 }, { "capslock", 0x3A }, { "leftctrl", 0x1D }, { "tab", 0x0F }, { "backquote", 0x29 }
+		};
+		const auto k = Lower(grabKey);
+		grabIsMouse = false;
+		grabCode = 0;
+		if (k.rfind("mouse", 0) == 0 && k.size() == 6 && k[5] >= '3' && k[5] <= '8') {
+			grabIsMouse = true;
+			grabCode = static_cast<std::uint32_t>(k[5] - '1');  // Mouse3 = 2 (środkowy), Mouse4 = 3, ...
+		} else if (const auto it = keys.find(k); it != keys.end()) {
+			grabCode = it->second;
+		} else if (!k.empty()) {
+			try {
+				grabCode = static_cast<std::uint32_t>(std::stoul(k, nullptr, 0));  // np. 0x22 albo 34
+			} catch (...) {
+				logger::warn("Nieznany klawisz GrabKey='{}' – podnoszenie wyłączone", grabKey);
+			}
+		}
+	}
 
 	r.Get("lefthand.enabled", leftEnabled);
 	r.Get("lefthand.attackevent", leftAttackEvent);

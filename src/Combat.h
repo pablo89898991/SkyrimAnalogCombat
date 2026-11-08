@@ -153,6 +153,11 @@ private:
 	int               _sector = 0;      // aktualny sektor 0..15
 	Clock::time_point _pressTime{};
 	Clock::time_point _lastMouse{};     // do liczenia prędkości ruchu
+	Clock::time_point _lastReverse{};   // ostatni szybki ruch wstecz (ciągłość szarpnięcia)
+	Vec               _dz{};            // ruch zebrany w martwej strefie
+	Clock::time_point _dzStart{};       // kiedy zaczął się zbierać
+
+	static Vec ApplyStickDeadZone(Vec a_v);
 	Clock::time_point _lastStrike{};
 	bool              _struckOnce = false;
 	Clock::time_point _armStart{};      // kiedy zamach został uzbrojony (do ciosu mocy)

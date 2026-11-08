@@ -246,6 +246,18 @@ bool Combat::SwallowStick(float a_x, float a_y)
 	return Clock::now() < s_settleUntil;
 }
 
+Combat::Vec Combat::ApplyStickDeadZone(Vec a_v)
+{
+	// radialna martwa strefa z przeskalowaniem, żeby poza nią ruch był płynny od zera
+	const float dz = Config::Get().stickDeadZone;
+	const float len = a_v.Len();
+	if (len <= dz || len < 1e-5f) {
+		return {};
+	}
+	const float scaled = (std::min)((len - dz) / (1.0f - dz), 1.0f);
+	return { a_v.x / len * scaled, a_v.y / len * scaled };
+}
+
 bool Combat::Charged() const
 {
 	const auto& cfg = Config::Get();
@@ -265,6 +277,7 @@ void Combat::Begin(bool a_gamepad)
 	_movedAtAll = false;
 	_windup = {};
 	_stick = {};
+	_dz = {};
 	_reverse = 0.0f;
 	_pressTime = Clock::now();
 	_struckOnce = false;
@@ -641,20 +654,33 @@ bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 	const auto& cfg = Config::Get();
 	const float s = cfg.mouseSensitivity;
 	// Zakładamy dy > 0 = ruch myszy w dół (jak w DirectInput); InvertY odwraca.
-	const Vec d{ a_dx * s, (cfg.invertY ? a_dy : -a_dy) * s };
+	const Vec raw{ a_dx * s, (cfg.invertY ? a_dy : -a_dy) * s };
 
-	if (d.x != 0.0f || d.y != 0.0f) {
-		_movedAtAll = true;
-	}
-
-	// czas od poprzedniego ruchu (do prędkości szarpnięcia)
-	const auto  now = Clock::now();
-	const float dt = std::clamp(std::chrono::duration<float>(now - _lastMouse).count(), 0.001f, 0.1f);
+	const auto now = Clock::now();
+	const auto prev = _lastMouse;
 	_lastMouse = now;
 
 	if (InCooldown()) {
+		_dz = {};
 		return cfg.freezeCamera;  // ruch "dokończenia" ciosu nie uzbraja kolejnego zamachu
 	}
+
+	// MARTWA STREFA: drobny ruch (drżenie ręki, mikrokorekty) jest zbierany i ignorowany,
+	// dopóki nie wyjdzie poza promień DeadZone. Ruch tam i z powrotem w środku strefy się znosi.
+	if (_dz.x == 0.0f && _dz.y == 0.0f) {
+		_dzStart = (now - prev > std::chrono::milliseconds(50)) ? now - std::chrono::milliseconds(8) : prev;
+	}
+	_dz.x += raw.x;
+	_dz.y += raw.y;
+	if (_dz.Len() < cfg.mouseDeadZone) {
+		return cfg.freezeCamera;
+	}
+	const Vec d = _dz;
+	_dz = {};
+	_movedAtAll = true;
+
+	// czas, w którym zebrał się ten ruch (do prędkości szarpnięcia)
+	const float dt = std::clamp(std::chrono::duration<float>(now - _dzStart).count(), 0.001f, 0.1f);
 
 	// Kolejny zamach w serii wymaga wyraźniejszego ruchu – naturalne "odbicie" ręki po ciosie
 	// nie uzbraja nowego cięcia.
@@ -673,14 +699,20 @@ bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 	case State::Armed:
 		{
 			const float along = d.Dot(FromAngle(_angle));
+			// Cios = JEDNO ciągłe, szybkie szarpnięcie w drugą stronę o długości StrikeThreshold.
+			// Każdy ruch w przód, zwolnienie albo przerwa kasuje odliczanie, więc drobne
+			// ruchy myszy po wybraniu kierunku nie sumują się w cios.
 			if (along >= 0.0f) {
 				// dalej w stronę zamachu albo w bok – broń "jedzie" po okręgu
 				_windup.x += d.x;
 				_windup.y += d.y;
-				_reverse = (std::max)(0.0f, _reverse - along);
+				_reverse = 0.0f;
 				Arm(AngleDeg(_windup));
 			} else if (-along / dt >= cfg.strikeMinSpeed) {
-				// szybkie szarpnięcie w drugą stronę – liczy się do ciosu
+				if (std::chrono::duration<float>(now - _lastReverse).count() > cfg.strikeFlickGap) {
+					_reverse = 0.0f;  // nowe szarpnięcie
+				}
+				_lastReverse = now;
 				_reverse += -along;
 				if (_reverse >= cfg.mouseStrikeThreshold) {
 					Strike();
@@ -689,7 +721,7 @@ bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 				// powolny ruch wstecz to nie cios, tylko cofanie zamachu
 				_windup.x += d.x;
 				_windup.y += d.y;
-				_reverse = (std::max)(0.0f, _reverse + along);  // along < 0 -> zmniejsza
+				_reverse = 0.0f;
 				if (_windup.Len() < windupNeeded * 0.5f) {
 					_state = State::Charging;  // zamach cofnięty prawie do środka
 					logger::debug("Gest: zamach cofnięty");
@@ -708,7 +740,7 @@ bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 bool Combat::OnRightStick(float a_x, float a_y)
 {
 	if (_rangedPhase == RangedPhase::Waiting || _rangedPhase == RangedPhase::Cocked) {
-		return OnRangedMotion(a_y, true);
+		return OnRangedMotion(ApplyStickDeadZone({ a_x, a_y }).y, true);
 	}
 
 	if (_state == State::Idle || !_gamepad) {
@@ -716,7 +748,7 @@ bool Combat::OnRightStick(float a_x, float a_y)
 	}
 
 	const auto& cfg = Config::Get();
-	const Vec   v{ a_x, a_y };
+	const Vec   v = ApplyStickDeadZone({ a_x, a_y });
 	_stick = v;
 
 	if (v.Len() > 0.2f) {

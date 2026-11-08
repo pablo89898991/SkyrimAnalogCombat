@@ -10,6 +10,7 @@ namespace
 			// Config po załadowaniu danych – ActorValueList jest już dostępny.
 			Config::Get().Load();
 			Visual::RegisterEvents();
+			Hooks::RegisterInput();
 		}
 	}
 }

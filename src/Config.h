@@ -23,8 +23,10 @@ struct Config
 
 	// [Mouse]
 	float mouseWindupThreshold = 80.0f;
-	float mouseStrikeThreshold = 70.0f;
-	float strikeMinSpeed = 900.0f;   // min. prędkość szarpnięcia (jednostki/s) – wolny ruch wstecz nie tnie
+	float mouseStrikeThreshold = 120.0f;
+	float strikeMinSpeed = 1500.0f;
+	float strikeFlickGap = 0.06f;
+	float mouseDeadZone = 25.0f;     // ruch mniejszy niż ten promień jest ignorowany (drżenie ręki)    // s – przerwa w ruchu, po której szarpnięcie liczy się od nowa   // min. prędkość szarpnięcia (jednostki/s) – wolny ruch wstecz nie tnie
 	float chainWindupMult = 1.6f;    // kolejny zamach w serii wymaga tyle razy większego ruchu
 	float mouseSensitivity = 1.0f;
 	bool  invertY = false;
@@ -33,6 +35,7 @@ struct Config
 	bool  gamepadEnabled = true;
 	float stickWindup = 0.70f;
 	float stickStrike = 0.50f;
+	float stickDeadZone = 0.15f;     // martwa strefa drążka podczas gestów
 
 	// [Timing]
 	float strikeCooldown = 0.30f;
@@ -110,7 +113,10 @@ struct Config
 	bool        liveReload = true;
 
 	// [Activate]
-	bool        disableHoldToGrab = true;  // przytrzymanie E nie podnosi przedmiotów – służy do tego klawisz "Grab"
+	bool          disableHoldToGrab = true;  // przytrzymanie E nie podnosi przedmiotów
+	std::string   grabKey = "G";             // własny klawisz podnoszenia (litera, cyfra, F1-F12, Mouse3-Mouse8 lub kod DIK)
+	std::uint32_t grabCode = 0x22;           // wyliczone z grabKey
+	bool          grabIsMouse = false;
 
 	// [Feel] – "naturalność" ruchu
 	bool  weaponWeight = true;
