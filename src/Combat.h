@@ -25,6 +25,9 @@ public:
 	bool OnMouseMove(std::int32_t a_dx, std::int32_t a_dy);
 	bool OnRightStick(float a_x, float a_y);
 
+	// Wywoływane co klatkę: ponawia zbuforowany cios, aż gra go przyjmie.
+	void Update(float a_delta);
+
 	[[nodiscard]] bool Active() const noexcept { return _state != State::Idle; }
 
 	// Aktualne "wychylenie" broni do efektu wizualnego: wektor o długości 0..1
@@ -35,6 +38,11 @@ public:
 		float y = 0.0f;
 	};
 	[[nodiscard]] Aim GetAim() const;
+
+	// Ostatni wyprowadzony cios – do animacji proceduralnej.
+	[[nodiscard]] std::uint32_t StrikeId() const noexcept { return _strikeId; }
+	[[nodiscard]] float         StrikeAngle() const noexcept { return _strikeAngle; }
+	[[nodiscard]] bool          StrikePower() const noexcept { return _strikePower; }
 
 	// Czy gracz ma wyjętą broń białą w prawej ręce (i mod jest włączony).
 	[[nodiscard]] static bool MeleeReady() { return CanUseDirectionalCombat(); }
@@ -72,6 +80,11 @@ private:
 	void Strike();
 	void AfterStrike();
 	void NormalAttack();
+
+	// Wysyła atak do gry. Gdy gra go odrzuci, bo poprzedni jeszcze trwa, cios trafia do bufora.
+	bool Dispatch(std::string a_event, float a_angle, std::string a_label);
+	bool TrySend(const std::string& a_event);
+	void Commit(float a_angle, bool a_power);
 	[[nodiscard]] bool InCooldown() const;
 
 	State             _state = State::Idle;
@@ -85,4 +98,17 @@ private:
 	Clock::time_point _pressTime{};
 	Clock::time_point _lastStrike{};
 	bool              _struckOnce = false;
+	Clock::time_point _armStart{};      // kiedy zamach został uzbrojony (do ciosu mocy)
+	std::uint32_t     _strikeId = 0;
+	bool              _strikePower = false;
+
+	struct Pending
+	{
+		bool        active = false;
+		std::string event;
+		std::string label;
+		float       angle = 0.0f;
+		float       age = 0.0f;
+	} _pending;
+	float             _strikeAngle = 0.0f;
 };

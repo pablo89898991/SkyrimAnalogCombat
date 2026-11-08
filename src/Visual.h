@@ -3,9 +3,14 @@
 #include "PCH.h"
 
 // Efekt "latającej broni" w 1. osobie:
-//  - ukrywa siatki rąk/rękawic (skinned geometry) – szkielet dalej animuje broń,
-//  - podczas zamachu przesuwa i przechyla węzeł WEAPON w stronę ruchu myszy/drążka.
+//  - ukrywa siatki rąk/rękawic (skinned geometry),
+//  - w trybie proceduralnym sam ustawia broń względem kamery: spoczynek, zamach
+//    po okręgu i cięcie łukiem przez środek ekranu pod dowolnym kątem.
 namespace Visual
 {
 	void Install();
+	void RegisterEvents();  // po kDataLoaded
+
+	// Czy w tej chwili broń animuje mod (1. osoba, broń biała, [Procedural] Enabled).
+	bool ProceduralActive();
 }

@@ -15,12 +15,21 @@ Analogowy / kierunkowy tryb walki bronią białą w stylu *Dead Island (Analog C
 **Pad:** przytrzymaj prawy spust, wychyl prawy drążek (zamach), potem przerzuć go na drugą stronę.
 Steam Controller z żyroskopem zmapowanym na mysz działa tak samo jak mysz.
 
-| Zamach   | Cios                      | Domyślna animacja (vanilla) |
-|----------|---------------------------|-----------------------------|
-| w lewo   | cięcie z lewej w prawo    | `attackPowerStartLeft`      |
-| w prawo  | cięcie z prawej w lewo    | `attackPowerStartRight`     |
-| w górę   | cios z góry               | `attackPowerStartForward`   |
-| w dół    | cios od dołu / pchnięcie  | `attackPowerStartInPlace`   |
+**16 kierunków na całym okręgu** (jak w Dead Island). Kąt zamachu jest liczony płynnie,
+a potem zatrzaskiwany do 4, 8 albo 16 sektorów (`Directions` w `.ini`). Zamach w prawo-górę daje
+cięcie ukośne w lewo-dół i tak dalej. Trzymając LPM, możesz wodzić bronią po okręgu i korygować
+kąt przed ciosem.
+
+Każdy z 16 kątów może mieć własną animację (`Windup_000` … `Windup_337`). Kąt bez własnej animacji
+dostaje najbliższą z 4 bazowych (vanilla: ciosy mocy w lewo/prawo/do przodu/w miejscu).
+
+**Latająca broń i animacja proceduralna (1. osoba):** ręce są ukryte, a broń animuje sam mod.
+W spoczynku wisi z boku, podczas zamachu jedzie po okręgu za myszą, a cios to łuk przez środek
+ekranu pod dowolnym z 16 kątów. Gra dostaje zwykły atak, który liczy trafienia i obrażenia.
+Ruch ma wagę zależną od broni, łuk z rozpędem i dokończeniem, kołysanie przy chodzeniu,
+bezwładność przy obrocie kamery, zatrzymanie i odbicie przy trafieniu, pozę bloku i animację
+wyjęcia broni. Tempo cięcia synchronizuje się z momentem trafienia w grze.
+Ustawienia są w sekcjach `[FloatingWeapon]`, `[Procedural]` i `[Feel]`. `.ini` przeładowuje się w trakcie gry.
 
 ## Wymagania
 
@@ -62,7 +71,8 @@ xmake -y
 - **Animacje:** vanilla ma kierunkowe tylko ciosy mocy, więc domyślnie każdy cios kierunkowy jest
   ciosem mocy (z kosztem staminy). Bez staminy leci zwykły atak. Prawdziwe kierunkowe cięcia
   wymagają własnych animacji. Można je podpiąć przez OAR: ustaw `DirectionActorValue = Variable09`
-  i użyj warunku na tę wartość aktora (1 = lewo, 2 = prawo, 3 = góra, 4 = dół).
+  (sektor 1..16: 1 = prawo, 5 = góra, 9 = lewo, 13 = dół) albo `AngleActorValue` (kąt 0–360°)
+  i użyj warunku na tę wartość aktora.
 - Brak wskaźnika kierunku na HUD. Feedbackiem jest zatrzymana kamera.
 - Tylko prawa ręka. Dual-wield i lewa ręka działają po staremu.
 - Możliwe konflikty z frameworkami ataków (MCO/ADXP, SCAR, Elden Rim itp.), które też przejmują LPM.

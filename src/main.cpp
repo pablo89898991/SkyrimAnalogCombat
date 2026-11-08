@@ -9,6 +9,7 @@ namespace
 		if (a_msg->type == SKSE::MessagingInterface::kDataLoaded) {
 			// Config po załadowaniu danych – ActorValueList jest już dostępny.
 			Config::Get().Load();
+			Visual::RegisterEvents();
 		}
 	}
 }

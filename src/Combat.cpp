@@ -1,5 +1,7 @@
 #include "Combat.h"
 
+#include "Visual.h"
+
 namespace
 {
 	constexpr float kPi = 3.14159265358979f;
@@ -148,6 +150,9 @@ void Combat::Arm(float a_deg)
 	if (_state != State::Armed || sector != _sector) {
 		logger::debug("Gest: zamach {} (kąt surowy {:.1f}°)", Describe(sector), a_deg);
 	}
+	if (_state != State::Armed) {
+		_armStart = Clock::now();
+	}
 	_state = State::Armed;
 	_angle = a_deg;
 	_sector = sector;
@@ -171,19 +176,23 @@ void Combat::Strike()
 		av->SetActorValue(cfg.angleAV, _angle);
 	}
 
-	const auto& ev = EventFor(_sector);
-	const bool  hasStamina = av->GetActorValue(RE::ActorValue::kStamina) > 0.0f;
+	const bool stamina = av->GetActorValue(RE::ActorValue::kStamina) > 0.0f;
+	const bool procedural = Visual::ProceduralActive();
 
-	bool ok = false;
-	if (hasStamina && !ev.empty()) {
-		ok = player->NotifyAnimationGraph(ev.c_str());
+	// 1. osoba + tryb proceduralny: wygląd rysuje mod, gra dostaje tylko atak od obrażeń.
+	// Inaczej: kierunkowe animacje z [Animations].
+	std::string ev;
+	if (procedural) {
+		const bool charged = cfg.powerChargeTime > 0.0f && Seconds(_armStart) >= cfg.powerChargeTime;
+		ev = (charged && stamina) ? cfg.procPowerEvent : cfg.procAttackEvent;
+	} else if (stamina) {
+		ev = EventFor(_sector);
 	}
-	if (!ok && !cfg.fallbackEvent.empty()) {
-		ok = player->NotifyAnimationGraph(cfg.fallbackEvent.c_str());
-		logger::debug("Gest: cios z {} -> fallback '{}' ({})", Describe(_sector), cfg.fallbackEvent, ok ? "ok" : "odrzucony");
-	} else {
-		logger::debug("Gest: cios z {} -> '{}' ({})", Describe(_sector), ev, ok ? "ok" : "odrzucony");
+	if (ev.empty()) {
+		ev = cfg.fallbackEvent;
 	}
+
+	Dispatch(ev, _angle, "cios z " + Describe(_sector) + (procedural ? " [proceduralny]" : ""));
 
 	AfterStrike();
 }
@@ -200,9 +209,80 @@ void Combat::AfterStrike()
 void Combat::NormalAttack()
 {
 	const auto& cfg = Config::Get();
-	if (auto* player = RE::PlayerCharacter::GetSingleton(); player && !cfg.normalAttackEvent.empty()) {
-		const bool ok = player->NotifyAnimationGraph(cfg.normalAttackEvent.c_str());
-		logger::debug("Gest: kliknięcie -> '{}' ({})", cfg.normalAttackEvent, ok ? "ok" : "odrzucony");
+	if (!cfg.normalAttackEvent.empty()) {
+		// zwykłe kliknięcie = cięcie z prawej w lewo (dla animacji proceduralnej)
+		Dispatch(cfg.normalAttackEvent, 20.0f, "kliknięcie");
+	}
+}
+
+bool Combat::TrySend(const std::string& a_event)
+{
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!player) {
+		return false;
+	}
+	const auto& cfg = Config::Get();
+	bool        ok = !a_event.empty() && player->NotifyAnimationGraph(a_event.c_str());
+	if (!ok && !cfg.fallbackEvent.empty() && cfg.fallbackEvent != a_event) {
+		ok = player->NotifyAnimationGraph(cfg.fallbackEvent.c_str());
+	}
+	return ok;
+}
+
+void Combat::Commit(float a_angle, bool a_power)
+{
+	_strikeAngle = a_angle;
+	_strikePower = a_power;
+	++_strikeId;  // animacja proceduralna startuje dopiero teraz -> widać tylko ciosy, które zadają obrażenia
+}
+
+bool Combat::Dispatch(std::string a_event, float a_angle, std::string a_label)
+{
+	const auto& cfg = Config::Get();
+	auto*       player = RE::PlayerCharacter::GetSingleton();
+	if (!player) {
+		return false;
+	}
+
+	// Nowy cios zastępuje stary z bufora (liczy się ostatni kierunek).
+	_pending.active = false;
+
+	if (TrySend(a_event)) {
+		Commit(a_angle, a_event.find("Power") != std::string::npos);
+		logger::debug("Gest: {} -> '{}' (ok)", a_label, a_event);
+		return true;
+	}
+
+	const bool busy = player->AsActorState()->GetAttackState() != RE::ATTACK_STATE_ENUM::kNone;
+	if (busy && cfg.strikeBufferTime > 0.0f) {
+		_pending = { true, std::move(a_event), std::move(a_label), a_angle, 0.0f };
+		logger::debug("Gest: {} -> poprzedni atak trwa, cios w buforze", _pending.label);
+		return false;
+	}
+
+	logger::debug("Gest: {} -> '{}' odrzucony (brak staminy lub zły stan postaci)", a_label, a_event);
+	return false;
+}
+
+void Combat::Update(float a_delta)
+{
+	if (!_pending.active) {
+		return;
+	}
+	_pending.age += a_delta;
+
+	if (!CanUseDirectionalCombat()) {
+		_pending.active = false;  // schowana broń, menu itp.
+		return;
+	}
+
+	if (TrySend(_pending.event)) {
+		_pending.active = false;
+		Commit(_pending.angle, _pending.event.find("Power") != std::string::npos);
+		logger::debug("Gest: {} -> '{}' (ok, z bufora po {:.2f} s)", _pending.label, _pending.event, _pending.age);
+	} else if (_pending.age > Config::Get().strikeBufferTime) {
+		_pending.active = false;
+		logger::debug("Gest: {} -> bufor wygasł po {:.2f} s", _pending.label, _pending.age);
 	}
 }
 

@@ -115,6 +115,7 @@ void Config::Load()
 
 	r.Get("timing.strikecooldown", strikeCooldown);
 	r.Get("timing.tapmaxtime", tapMaxTime);
+	r.Get("timing.strikebuffertime", strikeBufferTime);
 
 	r.Get("animations.windupright", windupRight);
 	r.Get("animations.windupup", windupUp);
@@ -145,11 +146,41 @@ void Config::Load()
 
 	r.Get("floatingweapon.hidearms", hideArms);
 	r.Get("floatingweapon.hidearmsonlywhendrawn", hideArmsOnlyWhenDrawn);
-	r.Get("floatingweapon.followaim", followAim);
-	r.Get("floatingweapon.maxoffset", maxOffset);
-	r.Get("floatingweapon.maxtilt", maxTilt);
-	r.Get("floatingweapon.smoothing", smoothing);
-	smoothing = (std::max)(0.1f, smoothing);
+	r.Get("general.livereload", liveReload);
+
+	r.Get("procedural.enabled", procEnabled);
+	r.Get("procedural.attackevent", procAttackEvent);
+	r.Get("procedural.powerattackevent", procPowerEvent);
+	r.Get("procedural.powerchargetime", powerChargeTime);
+	r.Get("procedural.distance", procDistance);
+	r.Get("procedural.centerx", procCenterX);
+	r.Get("procedural.centerz", procCenterZ);
+	r.Get("procedural.radius", procRadius);
+	r.Get("procedural.pullback", procPullBack);
+	r.Get("procedural.reach", procReach);
+	r.Get("procedural.restx", procRestX);
+	r.Get("procedural.restz", procRestZ);
+	r.Get("procedural.resttilt", procRestTilt);
+	r.Get("procedural.swingtimescale", swingTimeScale);
+	r.Get("procedural.smoothing", procSmoothing);
+	r.Get("procedural.bladeroll", procBladeRoll);
+	r.Get("procedural.flipblade", procFlipBlade);
+	r.Get("procedural.pivotatcenter", procPivotAtCenter);
+	swingTimeScale = (std::max)(0.2f, swingTimeScale);
+
+	r.Get("feel.weaponweight", weaponWeight);
+	r.Get("feel.synctohits", syncToHits);
+	r.Get("feel.overshoot", overshoot);
+	r.Get("feel.walkbob", walkBob);
+	r.Get("feel.camerasway", cameraSway);
+	r.Get("feel.breathing", breathing);
+	r.Get("feel.hitstop", hitStop);
+	r.Get("feel.hitrecoil", hitRecoil);
+	r.Get("feel.hitshake", hitShake);
+	r.Get("feel.blockpose", blockPose);
+	r.Get("feel.drawanimation", drawAnimation);
+	overshoot = std::clamp(overshoot, 0.0f, 0.6f);
+	procSmoothing = (std::max)(0.1f, procSmoothing);
 
 	r.Get("general.directions", directions);
 	if (directions != 4 && directions != 8 && directions != 16) {
