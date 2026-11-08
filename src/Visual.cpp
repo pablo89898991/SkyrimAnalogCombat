@@ -187,6 +187,9 @@ namespace Visual
 			bool          sweeping = false;
 			float         sweepTime = 0.0f;
 			float         sweepAngle = 0.0f;
+			bool          sweepPower = false;
+			float         sweepStartTime = 0.0f;
+			bool          hitMeasured = true;
 		} g_weap;
 
 		void ReleaseWeapon()
