@@ -93,10 +93,10 @@ Combat::Aim Combat::GetAim() const
 	return { v.x, v.y };
 }
 
-bool Combat::CanUseDirectionalCombat()
+bool Combat::CanUseDirectionalCombat(bool a_left)
 {
 	const auto& cfg = Config::Get();
-	if (!cfg.enabled) {
+	if (!cfg.enabled || (a_left && !cfg.leftEnabled)) {
 		return false;
 	}
 
@@ -109,14 +109,113 @@ bool Combat::CanUseDirectionalCombat()
 		return false;
 	}
 
-	// Tylko broń biała w prawej ręce (miecze, topory, buławy, sztylety, dwuręczne).
-	auto* right = player->GetEquippedObject(false);
-	auto* weap = right ? right->As<RE::TESObjectWEAP>() : nullptr;
+	// Broń biała w tej ręce (miecze, topory, buławy, sztylety; w prawej też dwuręczne).
+	auto* obj = player->GetEquippedObject(a_left);
+	auto* weap = obj ? obj->As<RE::TESObjectWEAP>() : nullptr;
 	if (!weap || !weap->IsMelee() || weap->IsHandToHandMelee()) {
 		return false;
 	}
+	if (a_left) {
+		// broń dwuręczna "siedzi" w obu rękach – lewa ręka wtedy blokuje, nie atakuje
+		const auto type = weap->GetWeaponType();
+		if (type == RE::WeaponTypes::kTwoHandSword || type == RE::WeaponTypes::kTwoHandAxe) {
+			return false;
+		}
+	}
 
 	return true;
+}
+
+const std::string& Combat::HandFallback() const
+{
+	const auto& cfg = Config::Get();
+	return _left ? cfg.leftAttackEvent : cfg.fallbackEvent;
+}
+
+bool Combat::ShieldReady()
+{
+	const auto& cfg = Config::Get();
+	if (!cfg.enabled || !cfg.shieldEnabled) {
+		return false;
+	}
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!player) {
+		return false;
+	}
+	auto* obj = player->GetEquippedObject(true);
+	auto* armo = obj ? obj->As<RE::TESObjectARMO>() : nullptr;
+	return armo && armo->IsShield();
+}
+
+namespace
+{
+	struct ShieldState
+	{
+		float                                 accum = 0.0f;
+		std::chrono::steady_clock::time_point last{};
+		std::chrono::steady_clock::time_point lastBash{};
+		bool                                  stickLatched = false;
+	} g_shield;
+
+	void Bash(const char* a_src)
+	{
+		const auto& cfg = Config::Get();
+		auto*       player = RE::PlayerCharacter::GetSingleton();
+		const auto  now = std::chrono::steady_clock::now();
+		if (!player || std::chrono::duration<float>(now - g_shield.lastBash).count() < cfg.bashCooldown) {
+			return;
+		}
+		g_shield.lastBash = now;
+		g_shield.accum = 0.0f;
+		const bool ok = player->NotifyAnimationGraph(cfg.bashEvent.c_str());
+		logger::debug("Tarcza: uderzenie ({}) -> '{}' ({})", a_src, cfg.bashEvent, ok ? "ok" : "odrzucony");
+	}
+}
+
+bool Combat::OnShieldMotion(std::int32_t, std::int32_t a_dy)
+{
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!player || !ShieldReady() || !player->IsBlocking()) {
+		g_shield.accum = 0.0f;
+		return false;
+	}
+	const auto& cfg = Config::Get();
+	const auto  now = std::chrono::steady_clock::now();
+	const float dt = std::chrono::duration<float>(now - g_shield.last).count();
+	g_shield.last = now;
+
+	g_shield.accum *= std::exp(-dt / cfg.bashWindow);  // stary ruch "wygasa"
+	const float up = (cfg.invertY ? a_dy : -a_dy) * cfg.mouseSensitivity;
+	if (up > 0.0f) {
+		g_shield.accum += up;
+	}
+	if (g_shield.accum >= cfg.bashFlick) {
+		Bash("mysz");
+	}
+	return false;  // kamera zostaje wolna – blokujesz i rozglądasz się normalnie
+}
+
+bool Combat::OnShieldStick(float, float a_y)
+{
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!player || !ShieldReady() || !player->IsBlocking()) {
+		g_shield.stickLatched = false;
+		return false;
+	}
+	const auto& cfg = Config::Get();
+	if (a_y >= cfg.bashStick && !g_shield.stickLatched) {
+		g_shield.stickLatched = true;
+		Bash("pad");
+	} else if (a_y < 0.3f) {
+		g_shield.stickLatched = false;
+	}
+	return false;
+}
+
+bool Combat::Charged() const
+{
+	const auto& cfg = Config::Get();
+	return _state == State::Armed && cfg.powerChargeTime > 0.0f && Seconds(_armStart) >= cfg.powerChargeTime;
 }
 
 bool Combat::InCooldown() const
@@ -126,6 +225,7 @@ bool Combat::InCooldown() const
 
 void Combat::Begin(bool a_gamepad)
 {
+	s_active = this;
 	_state = State::Charging;
 	_gamepad = a_gamepad;
 	_movedAtAll = false;
@@ -139,6 +239,9 @@ void Combat::Begin(bool a_gamepad)
 
 void Combat::Reset()
 {
+	if (s_active == this && _rangedPhase == RangedPhase::Idle) {
+		s_active = nullptr;
+	}
 	_state = State::Idle;
 	_windup = {};
 	_reverse = 0.0f;
@@ -177,22 +280,27 @@ void Combat::Strike()
 	}
 
 	const bool stamina = av->GetActorValue(RE::ActorValue::kStamina) > 0.0f;
-	const bool procedural = Visual::ProceduralActive();
+	const bool procedural = Visual::ProceduralActive(_left);
 
 	// 1. osoba + tryb proceduralny: wygląd rysuje mod, gra dostaje tylko atak od obrażeń.
 	// Inaczej: kierunkowe animacje z [Animations].
+	// Cios mocy = zamach przytrzymany co najmniej PowerChargeTime (i jest stamina).
 	std::string ev;
-	if (procedural) {
-		const bool charged = cfg.powerChargeTime > 0.0f && Seconds(_armStart) >= cfg.powerChargeTime;
-		ev = (charged && stamina) ? cfg.procPowerEvent : cfg.procAttackEvent;
-	} else if (stamina) {
-		ev = EventFor(_sector);
+	const bool  power = Charged() && stamina;
+	if (_left) {
+		// lewa ręka: vanilla ma tylko zwykły / mocny atak lewą ręką
+		ev = power ? cfg.leftPowerEvent : cfg.leftAttackEvent;
+	} else if (procedural) {
+		ev = power ? cfg.procPowerEvent : cfg.procAttackEvent;
+	} else {
+		// 3. osoba: zwykły cios = zwykły atak; cios mocy = kierunkowy cios mocy z [Animations]
+		ev = power ? EventFor(_sector) : cfg.procAttackEvent;
 	}
 	if (ev.empty()) {
-		ev = cfg.fallbackEvent;
+		ev = HandFallback();
 	}
 
-	Dispatch(ev, _angle, "cios z " + Describe(_sector) + (procedural ? " [proceduralny]" : ""));
+	Dispatch(ev, _angle, std::string(_left ? "[L] " : "[P] ") + "cios z " + Describe(_sector) + (procedural ? " [proceduralny]" : ""));
 
 	AfterStrike();
 }
@@ -209,9 +317,10 @@ void Combat::AfterStrike()
 void Combat::NormalAttack()
 {
 	const auto& cfg = Config::Get();
-	if (!cfg.normalAttackEvent.empty()) {
-		// zwykłe kliknięcie = cięcie z prawej w lewo (dla animacji proceduralnej)
-		Dispatch(cfg.normalAttackEvent, 20.0f, "kliknięcie");
+	// zwykłe kliknięcie: prawa ręka tnie z prawej w lewo, lewa z lewej w prawo
+	const std::string& ev = _left ? cfg.leftAttackEvent : cfg.normalAttackEvent;
+	if (!ev.empty()) {
+		Dispatch(ev, _left ? 160.0f : 20.0f, _left ? "[L] kliknięcie" : "[P] kliknięcie");
 	}
 }
 
@@ -223,8 +332,8 @@ bool Combat::TrySend(const std::string& a_event)
 	}
 	const auto& cfg = Config::Get();
 	bool        ok = !a_event.empty() && player->NotifyAnimationGraph(a_event.c_str());
-	if (!ok && !cfg.fallbackEvent.empty() && cfg.fallbackEvent != a_event) {
-		ok = player->NotifyAnimationGraph(cfg.fallbackEvent.c_str());
+	if (const auto& fb = HandFallback(); !ok && !fb.empty() && fb != a_event) {
+		ok = player->NotifyAnimationGraph(fb.c_str());
 	}
 	return ok;
 }
@@ -271,7 +380,7 @@ void Combat::Update(float a_delta)
 	}
 	_pending.age += a_delta;
 
-	if (!CanUseDirectionalCombat()) {
+	if (!MeleeHere()) {
 		_pending.active = false;  // schowana broń, menu itp.
 		return;
 	}
@@ -286,24 +395,179 @@ void Combat::Update(float a_delta)
 	}
 }
 
-bool Combat::OnAttackButton(RE::ButtonEvent* a_event)
+RangedKind Combat::CurrentRanged(bool a_left)
+{
+	const auto& cfg = Config::Get();
+	if (!cfg.enabled || !cfg.rangedEnabled || (a_left && !cfg.leftEnabled)) {
+		return RangedKind::None;
+	}
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!player || !player->AsActorState()->IsWeaponDrawn() || player->IsOnMount()) {
+		return RangedKind::None;
+	}
+	auto* obj = player->GetEquippedObject(a_left);
+	auto* weap = obj ? obj->As<RE::TESObjectWEAP>() : nullptr;
+	if (!weap) {
+		return RangedKind::None;
+	}
+	if (weap->IsStaff() && cfg.rangedStaff) {
+		return RangedKind::Staff;
+	}
+	if (a_left) {
+		return RangedKind::None;  // łuk i kusza są obsługiwane przez prawą rękę (LPM)
+	}
+	if (weap->IsBow() && cfg.rangedBow) {
+		return RangedKind::Bow;
+	}
+	if (weap->IsCrossbow() && cfg.rangedCrossbow) {
+		return RangedKind::Crossbow;
+	}
+	return RangedKind::None;
+}
+
+ButtonAction Combat::OnRangedButton(RE::ButtonEvent* a_event, RangedKind a_kind)
+{
+	const auto& cfg = Config::Get();
+
+	if (a_event->IsDown()) {
+		_rangedKind = a_kind;
+		_rangedPhase = RangedPhase::Waiting;
+		_rangedAccum = 0.0f;
+		_rangedFire = false;
+		_rangedMoved = false;
+		_rangedPress = Clock::now();
+		s_active = this;
+		logger::debug("Dystans: start ({})", a_kind == RangedKind::Bow ? "łuk" : a_kind == RangedKind::Crossbow ? "kusza" : "kostur");
+		return ButtonAction::Swallow;
+	}
+
+	if (_rangedPhase == RangedPhase::Idle) {
+		return ButtonAction::Pass;
+	}
+
+	if (a_event->IsUp()) {
+		const RangedPhase phase = _rangedPhase;
+		_rangedPhase = RangedPhase::Idle;
+		if (s_active == this) {
+			s_active = nullptr;
+		}
+		if (phase == RangedPhase::PassThrough) {
+			return ButtonAction::Pass;  // np. puszczenie cięciwy = strzał
+		}
+		if (_rangedFire) {
+			_rangedFire = false;
+			return ButtonAction::PressThenPass;
+		}
+		if (!_rangedMoved && cfg.tapForNormalAttack && Seconds(_rangedPress) <= cfg.tapMaxTime) {
+			logger::debug("Dystans: kliknięcie -> zwykłe użycie");
+			return ButtonAction::PressThenPass;
+		}
+		logger::debug("Dystans: anulowano (puszczono bez gestu)");
+		return ButtonAction::Swallow;
+	}
+
+	// trzymanie
+	if (_rangedFire) {
+		_rangedFire = false;
+		_rangedPhase = RangedPhase::PassThrough;
+		return ButtonAction::PassAsPress;
+	}
+	return _rangedPhase == RangedPhase::PassThrough ? ButtonAction::Pass : ButtonAction::Swallow;
+}
+
+bool Combat::OnRangedMotion(float a_up, bool a_stick)
+{
+	const auto& cfg = Config::Get();
+	if (_rangedPhase != RangedPhase::Waiting && _rangedPhase != RangedPhase::Cocked) {
+		return false;
+	}
+	if (_rangedFire) {
+		return false;  // gest już wykonany – kamera wolna do celowania
+	}
+	if (std::abs(a_up) > (a_stick ? 0.2f : 0.0f)) {
+		_rangedMoved = true;
+	}
+
+	const auto fire = [&](const char* a_what) {
+		_rangedFire = true;
+		logger::debug("Dystans: {}", a_what);
+	};
+
+	const bool pullPhase = _rangedKind == RangedKind::Bow || (_rangedKind == RangedKind::Crossbow && _rangedPhase == RangedPhase::Waiting);
+
+	if (pullPhase) {
+		// ruch do siebie (w dół)
+		bool done = false;
+		if (a_stick) {
+			done = a_up <= -cfg.rangedStickPull;
+		} else {
+			_rangedAccum = (std::max)(0.0f, _rangedAccum - a_up);
+			done = _rangedAccum >= cfg.rangedPull;
+		}
+		if (done) {
+			if (_rangedKind == RangedKind::Bow) {
+				fire("naciągnięto cięciwę – celuj i puść LPM, by strzelić");
+			} else {
+				_rangedPhase = RangedPhase::Cocked;
+				_rangedAccum = 0.0f;
+				logger::debug("Dystans: kusza napięta – pchnij mysz od siebie, by strzelić");
+			}
+		}
+	} else {
+		// ruch od siebie (w górę): strzał z kuszy / czar z kostura
+		bool done = false;
+		if (a_stick) {
+			done = a_up >= cfg.rangedStickPull;
+		} else {
+			_rangedAccum = (std::max)(0.0f, _rangedAccum + a_up);
+			done = _rangedAccum >= cfg.rangedPush;
+		}
+		if (done) {
+			fire(_rangedKind == RangedKind::Crossbow ? "strzał z kuszy" : "czar z kostura");
+		}
+	}
+
+	return cfg.rangedFreezeCamera && !_rangedFire;
+}
+
+ButtonAction Combat::OnAttackButton(RE::ButtonEvent* a_event)
 {
 	const bool gamepad = a_event->GetDevice() == RE::INPUT_DEVICES::kGamepad;
 
 	if (a_event->IsDown()) {
 		if (gamepad && !Config::Get().gamepadEnabled) {
-			return false;
+			return ButtonAction::Pass;
 		}
-		if (!CanUseDirectionalCombat()) {
+		// Atak prawą ręką podczas bloku = uderzenie tarczą/bronią w vanilli – nie przeszkadzamy.
+		if (auto* pl = RE::PlayerCharacter::GetSingleton(); !_left && pl && pl->IsBlocking()) {
+			return ButtonAction::Pass;
+		}
+		if (const auto kind = CurrentRanged(_left); kind != RangedKind::None) {
 			Reset();
-			return false;  // zwykła walka vanilla
+			return OnRangedButton(a_event, kind);
+		}
+		_rangedPhase = RangedPhase::Idle;
+		if (!MeleeHere()) {
+			Reset();
+			return ButtonAction::Pass;  // zwykła walka vanilla
 		}
 		Begin(gamepad);
-		return true;
+		return ButtonAction::Swallow;
+	}
+
+	if (_rangedPhase != RangedPhase::Idle) {
+		if (CurrentRanged(_left) != _rangedKind) {
+			_rangedPhase = RangedPhase::Idle;  // broń schowana / zmieniona
+			if (s_active == this) {
+				s_active = nullptr;
+			}
+			return ButtonAction::Pass;
+		}
+		return OnRangedButton(a_event, _rangedKind);
 	}
 
 	if (_state == State::Idle) {
-		return false;
+		return ButtonAction::Pass;
 	}
 
 	if (a_event->IsUp()) {
@@ -315,19 +579,25 @@ bool Combat::OnAttackButton(RE::ButtonEvent* a_event)
 			NormalAttack();
 		}
 		Reset();
-		return true;
+		return ButtonAction::Swallow;
 	}
 
 	// trzymanie – połykamy, żeby gra nie zaczęła ładować ciosu mocy
-	if (!CanUseDirectionalCombat()) {
+	if (!MeleeHere()) {
 		Reset();
-		return false;
+		return ButtonAction::Pass;
 	}
-	return true;
+	return ButtonAction::Swallow;
 }
 
 bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 {
+	if (_rangedPhase == RangedPhase::Waiting || _rangedPhase == RangedPhase::Cocked) {
+		const auto& rc = Config::Get();
+		const float up = (rc.invertY ? a_dy : -a_dy) * rc.mouseSensitivity;
+		return OnRangedMotion(up, false);
+	}
+
 	if (_state == State::Idle || _gamepad) {
 		return false;
 	}
@@ -382,6 +652,10 @@ bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 
 bool Combat::OnRightStick(float a_x, float a_y)
 {
+	if (_rangedPhase == RangedPhase::Waiting || _rangedPhase == RangedPhase::Cocked) {
+		return OnRangedMotion(a_y, true);
+	}
+
 	if (_state == State::Idle || !_gamepad) {
 		return false;
 	}

@@ -148,6 +148,31 @@ void Config::Load()
 	r.Get("floatingweapon.hidearmsonlywhendrawn", hideArmsOnlyWhenDrawn);
 	r.Get("general.livereload", liveReload);
 
+	r.Get("lefthand.enabled", leftEnabled);
+	r.Get("lefthand.attackevent", leftAttackEvent);
+	r.Get("lefthand.powerattackevent", leftPowerEvent);
+
+	r.Get("shield.enabled", shieldEnabled);
+	r.Get("shield.bashevent", bashEvent);
+	r.Get("shield.flickthreshold", bashFlick);
+	r.Get("shield.flickwindow", bashWindow);
+	r.Get("shield.cooldown", bashCooldown);
+	r.Get("shield.stickpush", bashStick);
+	bashWindow = (std::max)(0.02f, bashWindow);
+
+	r.Get("ranged.enabled", rangedEnabled);
+	r.Get("ranged.bow", rangedBow);
+	r.Get("ranged.crossbow", rangedCrossbow);
+	r.Get("ranged.staff", rangedStaff);
+	r.Get("ranged.pullthreshold", rangedPull);
+	r.Get("ranged.pushthreshold", rangedPush);
+	r.Get("ranged.freezecamera", rangedFreezeCamera);
+	r.Get("ranged.stickpull", rangedStickPull);
+	r.Get("floatingweapon.hidearmsranged", hideArmsRanged);
+	rangedPull = (std::max)(1.0f, rangedPull);
+	rangedPush = (std::max)(1.0f, rangedPush);
+	rangedStickPull = std::clamp(rangedStickPull, 0.1f, 1.0f);
+
 	r.Get("procedural.enabled", procEnabled);
 	r.Get("procedural.attackevent", procAttackEvent);
 	r.Get("procedural.powerattackevent", procPowerEvent);

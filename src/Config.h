@@ -17,7 +17,7 @@ struct Config
 	bool freezeCamera = true;
 	bool chainStrikes = true;
 	bool strikeOnRelease = true;
-	bool tapForNormalAttack = true;
+	bool tapForNormalAttack = false;
 	bool debugLog = false;
 	int  directions = 16;  // 4, 8 albo 16
 
@@ -59,11 +59,35 @@ struct Config
 	bool hideArms = true;              // ukryj ręce/rękawice, widać samą broń
 	bool hideArmsOnlyWhenDrawn = true; // ukrywaj tylko z wyjętą bronią białą
 
+	// [LeftHand] – broń w lewej ręce (PPM): broń biała (dual wield) i kostur
+	bool        leftEnabled = true;
+	std::string leftAttackEvent = "attackStartLeftHand";
+	std::string leftPowerEvent = "attackStartLeftHand";
+
+	// [Shield] – szybkie pchnięcie myszy w górę podczas bloku = uderzenie tarczą
+	bool        shieldEnabled = true;
+	std::string bashEvent = "bashStart";
+	float       bashFlick = 120.0f;    // ile ruchu w górę w krótkim czasie
+	float       bashWindow = 0.12f;    // s – okno, w którym liczy się ruch
+	float       bashCooldown = 0.8f;   // s między uderzeniami
+	float       bashStick = 0.85f;     // pad: wychylenie drążka w górę
+
+	// [Ranged] – łuk, kusza, kostur
+	bool  rangedEnabled = true;
+	bool  rangedBow = true;           // pociągnij mysz do siebie = naciągnij cięciwę
+	bool  rangedCrossbow = true;      // w dół = napnij, w górę = strzał
+	bool  rangedStaff = true;         // pchnij mysz od siebie = rzuć czar
+	float rangedPull = 70.0f;         // ruch myszy do naciągnięcia / napięcia
+	float rangedPush = 60.0f;         // ruch myszy do strzału / rzucenia
+	bool  rangedFreezeCamera = true;  // kamera stoi do momentu naciągnięcia, potem celujesz
+	float rangedStickPull = 0.70f;    // to samo dla drążka pada
+	bool  hideArmsRanged = true;      // ukryj ręce także z łukiem/kuszą/kosturem
+
 	// [Procedural] – w 1. osobie mod sam animuje broń po dowolnym kącie
 	bool        procEnabled = true;
 	std::string procAttackEvent = "attackStart";             // zdarzenie od obrażeń (zwykły atak)
 	std::string procPowerEvent = "attackPowerStartInPlace";  // po naładowaniu
-	float       powerChargeTime = 0.0f;   // s trzymania zamachu do ciosu mocy; 0 = nigdy
+	float       powerChargeTime = 0.6f;   // s trzymania zamachu do ciosu mocy; 0 = nigdy
 	float       procDistance = 45.0f;     // jak daleko przed kamerą (jednostki gry)
 	float       procCenterX = 4.0f;
 	float       procCenterZ = -6.0f;

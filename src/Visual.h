@@ -11,6 +11,6 @@ namespace Visual
 	void Install();
 	void RegisterEvents();  // po kDataLoaded
 
-	// Czy w tej chwili broń animuje mod (1. osoba, broń biała, [Procedural] Enabled).
-	bool ProceduralActive();
+	// Czy w tej chwili broń w danej ręce animuje mod (1. osoba, broń biała, [Procedural] Enabled).
+	bool ProceduralActive(bool a_left);
 }

@@ -23,10 +23,21 @@ namespace Hooks
 			return REL::VersionShift(a_base, kAddedIn1799, SKSE::RUNTIME_SSE_1_7_99);
 		}
 
-		bool IsRightAttack(const RE::ButtonEvent* a_event)
+		// 0 = nie atak, 1 = prawa ręka (LPM), 2 = lewa ręka (PPM)
+		int AttackHand(const RE::ButtonEvent* a_event)
 		{
 			auto* ue = RE::UserEvents::GetSingleton();
-			return ue && a_event->QUserEvent() == ue->rightAttack;
+			if (!ue) {
+				return 0;
+			}
+			const auto& ev = a_event->QUserEvent();
+			if (ev == ue->rightAttack) {
+				return 1;
+			}
+			if (ev == ue->leftAttack) {
+				return 2;
+			}
+			return 0;
 		}
 
 		// ---- AttackBlockHandler::ProcessButton ----
@@ -35,10 +46,43 @@ namespace Hooks
 
 		void AttackProcessButton(RE::AttackBlockHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
 		{
-			if (a_event && IsRightAttack(a_event) && Combat::Get().OnAttackButton(a_event)) {
-				return;  // połknięte
+			const int hand = a_event ? AttackHand(a_event) : 0;
+			if (hand == 0) {
+				_AttackProcessButton(a_this, a_event, a_data);
+				return;
 			}
-			_AttackProcessButton(a_this, a_event, a_data);
+
+			auto& rt = a_event->GetRuntimeData();
+			switch (Combat::Get(hand == 2).OnAttackButton(a_event)) {
+			case ButtonAction::Swallow:
+				return;
+			case ButtonAction::PassAsPress:
+				{
+					// to samo zdarzenie, ale jako świeże wciśnięcie; potem przywracamy oryginał
+					const float value = rt.value, held = rt.heldDownSecs;
+					rt.value = 1.0f;
+					rt.heldDownSecs = 0.0f;
+					_AttackProcessButton(a_this, a_event, a_data);
+					rt.value = value;
+					rt.heldDownSecs = held;
+					return;
+				}
+			case ButtonAction::PressThenPass:
+				{
+					const float value = rt.value, held = rt.heldDownSecs;
+					rt.value = 1.0f;
+					rt.heldDownSecs = 0.0f;
+					_AttackProcessButton(a_this, a_event, a_data);
+					rt.value = value;
+					rt.heldDownSecs = held;
+					_AttackProcessButton(a_this, a_event, a_data);
+					return;
+				}
+			case ButtonAction::Pass:
+			default:
+				_AttackProcessButton(a_this, a_event, a_data);
+				return;
+			}
 		}
 
 		// ---- LookHandler::ProcessMouseMove ----
@@ -47,8 +91,16 @@ namespace Hooks
 
 		void LookProcessMouseMove(RE::LookHandler* a_this, RE::MouseMoveEvent* a_event, RE::PlayerControlsData* a_data)
 		{
-			if (a_event && Combat::Get().OnMouseMove(a_event->mouseInputX, a_event->mouseInputY)) {
-				return;  // kamera zamrożona podczas zamachu
+			if (a_event) {
+				bool swallow = false;
+				if (auto* hand = Combat::ActiveHand()) {
+					swallow = hand->OnMouseMove(a_event->mouseInputX, a_event->mouseInputY);
+				}
+				if (!swallow) {
+					Combat::OnShieldMotion(a_event->mouseInputX, a_event->mouseInputY);
+				} else {
+					return;  // kamera zamrożona podczas zamachu
+				}
 			}
 			_LookProcessMouseMove(a_this, a_event, a_data);
 		}
@@ -59,8 +111,15 @@ namespace Hooks
 
 		void LookProcessThumbstick(RE::LookHandler* a_this, RE::ThumbstickEvent* a_event, RE::PlayerControlsData* a_data)
 		{
-			if (a_event && a_event->IsRight() && Combat::Get().OnRightStick(a_event->xValue, a_event->yValue)) {
-				return;
+			if (a_event && a_event->IsRight()) {
+				bool swallow = false;
+				if (auto* hand = Combat::ActiveHand()) {
+					swallow = hand->OnRightStick(a_event->xValue, a_event->yValue);
+				}
+				if (swallow) {
+					return;
+				}
+				Combat::OnShieldStick(a_event->xValue, a_event->yValue);
 			}
 			_LookProcessThumbstick(a_this, a_event, a_data);
 		}

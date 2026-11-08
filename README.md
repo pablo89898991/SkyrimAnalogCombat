@@ -31,6 +31,16 @@ bezwładność przy obrocie kamery, zatrzymanie i odbicie przy trafieniu, pozę 
 wyjęcia broni. Tempo cięcia synchronizuje się z momentem trafienia w grze.
 Ustawienia są w sekcjach `[FloatingWeapon]`, `[Procedural]` i `[Feel]`. `.ini` przeładowuje się w trakcie gry.
 
+**Łuk, kusza, kostur:** trzymasz LPM i wykonujesz gest. Przy łuku pociągasz mysz do siebie
+(naciągnięcie), celujesz i puszczasz. Przy kuszy pociągasz do siebie (napięcie) i pchasz od siebie
+(strzał). Przy kosturze pchasz od siebie (czar). Ręce są ukryte, więc łuk i kostur „latają”.
+Ustawienia są w sekcji `[Ranged]`.
+
+**Obie ręce:** lewa ręka (PPM) działa tak samo jak prawa (LPM). Broń biała w lewej ręce (dual wield)
+ma własny gest i własną, lustrzaną animację proceduralną. Kostur działa w każdej ręce. Tarcza w lewej
+ręce blokuje jak w grze, a szybkie pchnięcie myszy w górę podczas bloku to uderzenie tarczą.
+Ustawienia są w sekcjach `[LeftHand]` i `[Shield]`.
+
 ## Wymagania
 
 - Skyrim SE 1.5.97 albo AE 1.6.x / 1.7.x
@@ -74,7 +84,6 @@ xmake -y
   (sektor 1..16: 1 = prawo, 5 = góra, 9 = lewo, 13 = dół) albo `AngleActorValue` (kąt 0–360°)
   i użyj warunku na tę wartość aktora.
 - Brak wskaźnika kierunku na HUD. Feedbackiem jest zatrzymana kamera.
-- Tylko prawa ręka. Dual-wield i lewa ręka działają po staremu.
 - Możliwe konflikty z frameworkami ataków (MCO/ADXP, SCAR, Elden Rim itp.), które też przejmują LPM.
 - Mod nie był jeszcze testowany w grze.
 

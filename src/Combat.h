@@ -11,17 +11,47 @@
 //  Armed --(puszczenie LPM, StrikeOnRelease)--> CIOS
 //  Charging --(szybkie puszczenie bez ruchu)--> zwykły atak
 //  po ciosie: ChainStrikes ? Charging (z cooldownem) : Spent (czeka na puszczenie)
+// Co hook ma zrobić z przyciskiem ataku.
+enum class ButtonAction : std::uint8_t
+{
+	Pass,           // przekaż do gry bez zmian
+	Swallow,        // połknij
+	PassAsPress,    // przekaż jako świeże wciśnięcie (start naciągania / strzał / czar)
+	PressThenPass   // najpierw sztuczne wciśnięcie, potem to zdarzenie (szybkie kliknięcie)
+};
+
+enum class RangedKind : std::uint8_t
+{
+	None,
+	Bow,
+	Crossbow,
+	Staff
+};
+
+// Jedna instancja na każdą rękę: Get(false) = prawa (LPM), Get(true) = lewa (PPM).
+// Mysz/drążek trafia do ręki, która ostatnio zaczęła gest (ActiveHand).
 class Combat
 {
 public:
-	static Combat& Get()
+	static Combat& Get(bool a_left = false)
 	{
-		static Combat c;
-		return c;
+		static Combat right{ false };
+		static Combat left{ true };
+		return a_left ? left : right;
 	}
 
+	// Ręka, która aktualnie "trzyma" mysz (gest w toku), albo nullptr.
+	static Combat* ActiveHand() noexcept { return s_active; }
+
+	// Tarcza: szybkie pchnięcie myszy podczas bloku = uderzenie tarczą.
+	// Zwraca true, jeśli ruch ma zostać połknięty.
+	static bool OnShieldMotion(std::int32_t a_dx, std::int32_t a_dy);
+	static bool OnShieldStick(float a_x, float a_y);
+
+	[[nodiscard]] bool IsLeft() const noexcept { return _left; }
+
 	// Każda funkcja zwraca true, jeśli zdarzenie ma zostać "połknięte" (nie trafi do gry).
-	bool OnAttackButton(RE::ButtonEvent* a_event);
+	ButtonAction OnAttackButton(RE::ButtonEvent* a_event);
 	bool OnMouseMove(std::int32_t a_dx, std::int32_t a_dy);
 	bool OnRightStick(float a_x, float a_y);
 
@@ -44,11 +74,27 @@ public:
 	[[nodiscard]] float         StrikeAngle() const noexcept { return _strikeAngle; }
 	[[nodiscard]] bool          StrikePower() const noexcept { return _strikePower; }
 
-	// Czy gracz ma wyjętą broń białą w prawej ręce (i mod jest włączony).
-	[[nodiscard]] static bool MeleeReady() { return CanUseDirectionalCombat(); }
+	// Zamach przytrzymany wystarczająco długo – następny cios będzie ciosem mocy.
+	[[nodiscard]] bool Charged() const;
+
+	// Czy gracz ma wyjętą broń białą w danej ręce (i mod jest włączony).
+	[[nodiscard]] static bool MeleeReady(bool a_left) { return CanUseDirectionalCombat(a_left); }
+
+	// Jaka broń dystansowa jest w danej ręce (lewa: tylko kostur).
+	[[nodiscard]] static RangedKind CurrentRanged(bool a_left);
+
+	// Czy w lewej ręce jest tarcza (i obsługa tarczy włączona).
+	[[nodiscard]] static bool ShieldReady();
 
 private:
 	using Clock = std::chrono::steady_clock;
+
+	explicit Combat(bool a_left) :
+		_left(a_left)
+	{}
+
+	const bool             _left;
+	static inline Combat*  s_active = nullptr;
 
 	enum class State : std::uint8_t
 	{
@@ -71,7 +117,9 @@ private:
 	static Vec   FromAngle(float a_deg);
 	static int   Sector16(float a_deg);     // kąt -> sektor 0..15 z rozdzielczością Directions
 	static const std::string& EventFor(int a_sector16);
-	static bool  CanUseDirectionalCombat();
+	static bool  CanUseDirectionalCombat(bool a_left);
+	[[nodiscard]] bool MeleeHere() const { return CanUseDirectionalCombat(_left); }
+	[[nodiscard]] const std::string& HandFallback() const;
 	static float Seconds(Clock::time_point a_from) { return std::chrono::duration<float>(Clock::now() - a_from).count(); }
 
 	void Begin(bool a_gamepad);
@@ -101,6 +149,24 @@ private:
 	Clock::time_point _armStart{};      // kiedy zamach został uzbrojony (do ciosu mocy)
 	std::uint32_t     _strikeId = 0;
 	bool              _strikePower = false;
+
+	// --- broń dystansowa ---
+	enum class RangedPhase : std::uint8_t
+	{
+		Idle,
+		Waiting,      // trzymasz LPM, czekamy na gest
+		Cocked,       // kusza napięta, czekamy na pchnięcie
+		PassThrough   // gest wykonany – gra dostała wciśnięcie, reszta idzie normalnie
+	};
+	ButtonAction OnRangedButton(RE::ButtonEvent* a_event, RangedKind a_kind);
+	bool         OnRangedMotion(float a_up, bool a_stick);
+
+	RangedKind        _rangedKind = RangedKind::None;
+	RangedPhase       _rangedPhase = RangedPhase::Idle;
+	float             _rangedAccum = 0.0f;
+	bool              _rangedFire = false;  // gest wykonany – przy następnym zdarzeniu przycisku podaj wciśnięcie
+	bool              _rangedMoved = false;
+	Clock::time_point _rangedPress{};
 
 	struct Pending
 	{

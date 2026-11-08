@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <format>
+#include <mutex>
 #include <fstream>
 #include <string>
 #include <string_view>

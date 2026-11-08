@@ -77,23 +77,6 @@ namespace Visual
 			return false;
 		}
 
-		bool Near(const RE::NiTransform& a, const RE::NiTransform& b)
-		{
-			constexpr float eps = 1e-3f;
-			for (int i = 0; i < 3; ++i) {
-				for (int j = 0; j < 3; ++j) {
-					if (std::abs(a.rotate.entry[i][j] - b.rotate.entry[i][j]) > eps) {
-						return false;
-					}
-				}
-			}
-			return std::abs(a.translate.x - b.translate.x) < eps &&
-			       std::abs(a.translate.y - b.translate.y) < eps &&
-			       std::abs(a.translate.z - b.translate.z) < eps;
-		}
-
-		bool g_proceduralActive = false;
-
 		// ---------------- przeładowanie .ini na żywo ----------------
 		void CheckLiveReload(float a_delta)
 		{
@@ -133,7 +116,7 @@ namespace Visual
 			std::unordered_set<RE::BSGeometry*> culled;
 		} g_arms;
 
-		void UpdateArms(RE::NiAVObject* a_root, bool a_hide)
+		void UpdateArms(RE::NiAVObject* a_root, bool a_hide, bool a_strict)
 		{
 			if (a_root != g_arms.root) {
 				g_arms.root = a_root;  // nowy model 1. osoby – stare wskaźniki są nieważne
@@ -145,7 +128,13 @@ namespace Visual
 
 			RE::BSVisit::TraverseScenegraphGeometries(a_root, [&](RE::BSGeometry* a_geom) {
 				if (a_hide) {
-					if (a_geom->GetGeometryRuntimeData().skinInstance && !IsUnderWeaponNode(a_geom) && !a_geom->GetAppCulled()) {
+					// Ręce, rękawice i ciało używają BSDismemberSkinInstance; broń (np. łuk z
+					// wyginaną cięciwą) ma zwykły NiSkinInstance – tej nie ukrywamy.
+					auto* skin = a_geom->GetGeometryRuntimeData().skinInstance.get();
+					// a_strict (broń dystansowa): tylko BSDismemberSkinInstance.
+					const bool bodyPart = !a_strict || netimmerse_cast<RE::BSDismemberSkinInstance*>(skin);
+					if (skin && bodyPart && !IsUnderWeaponNode(a_geom) &&
+						!a_geom->GetAppCulled()) {
 						a_geom->SetAppCulled(true);
 						g_arms.culled.insert(a_geom);
 					}
@@ -178,7 +167,6 @@ namespace Visual
 			bool            bladeKnown = false;
 
 			RE::NiTransform base{};
-			RE::NiTransform written{};
 			bool            applied = false;
 
 			Pose          cur{};
@@ -190,11 +178,69 @@ namespace Visual
 			bool          sweepPower = false;
 			float         sweepStartTime = 0.0f;
 			bool          hitMeasured = true;
-		} g_weap;
+			bool          left = false;
+		};
+		std::array<WeaponState, 2> g_hands{};  // [0] = prawa, [1] = lewa
 
-		void ReleaseWeapon()
+		// ---------------- nadpisanie pozycji broni tuż przed renderem ----------------
+		// Animacja gry ustawia węzły broni PÓŹNIEJ niż PlayerCharacter::Update, więc samo
+		// ustawienie local tam jest nadpisywane. Dlatego pozycję podajemy w liczeniu
+		// transformacji węzłów (UpdateDownwardPass): rodzic ma już świeży "world",
+		// a my ustawiamy local broni w ostatniej chwili przed obliczeniem jej "world".
+		struct Override
 		{
-			if (g_weap.applied && g_weap.node && Near(g_weap.node->local, g_weap.written)) {
+			std::atomic<RE::NiAVObject*> node{ nullptr };
+			std::mutex                   lock;
+			RE::NiAVObject*              root = nullptr;
+			RE::NiTransform              relToRoot{};  // docelowa transformacja względem korzenia 1. osoby
+		};
+		std::array<Override, 2> g_ovr;
+
+		void Publish(int a_hand, RE::NiAVObject* a_node, RE::NiAVObject* a_root, const RE::NiTransform& a_rel)
+		{
+			auto&            o = g_ovr[a_hand];
+			std::scoped_lock l(o.lock);
+			o.root = a_root;
+			o.relToRoot = a_rel;
+			o.node.store(a_node, std::memory_order_release);
+		}
+
+		void Unpublish(int a_hand)
+		{
+			auto&            o = g_ovr[a_hand];
+			std::scoped_lock l(o.lock);
+			o.node.store(nullptr, std::memory_order_release);
+			o.root = nullptr;
+		}
+
+		void ApplyOverride(RE::NiAVObject* a_node)
+		{
+			for (auto& o : g_ovr) {
+				if (o.node.load(std::memory_order_acquire) != a_node) {
+					continue;
+				}
+				std::scoped_lock l(o.lock);
+				if (o.node.load(std::memory_order_relaxed) != a_node || !o.root || !a_node->parent) {
+					return;
+				}
+				const RE::NiTransform desired = o.root->world * o.relToRoot;
+				RE::NiTransform       local = a_node->parent->world.Invert() * desired;
+				local.scale = a_node->local.scale;
+				a_node->local = local;
+
+				static std::atomic<bool> logged{ false };
+				if (!logged.exchange(true)) {
+					logger::info("Nadpisywanie pozycji broni przed renderem działa (UpdateDownwardPass)");
+				}
+				return;
+			}
+		}
+		bool                       g_procActive[2]{ false, false };
+
+		void ReleaseWeapon(WeaponState& g_weap)
+		{
+			Unpublish(g_weap.left ? 1 : 0);
+			if (g_weap.applied && g_weap.node) {
 				g_weap.node->local = g_weap.base;
 			}
 			g_weap.applied = false;
@@ -203,7 +249,7 @@ namespace Visual
 		}
 
 		// Kierunek ostrza w przestrzeni węzła WEAPON = środek bryły broni względem uchwytu.
-		void DetectBlade(RE::NiAVObject* a_node)
+		void DetectBlade(WeaponState& g_weap, RE::NiAVObject* a_node)
 		{
 			auto*           asNode = a_node->AsNode();
 			RE::NiAVObject* weapon = nullptr;
@@ -253,10 +299,10 @@ namespace Visual
 		// Zmierzony czas od ciosu do trafienia, osobno dla każdego typu broni.
 		std::array<float, 16> g_hitDelay{};  // 0 = jeszcze nie zmierzono
 
-		Profile GetProfile(RE::PlayerCharacter* a_player, const Config& c)
+		Profile GetProfile(RE::PlayerCharacter* a_player, const Config& c, bool a_left)
 		{
 			Profile pr;
-			auto*   obj = a_player->GetEquippedObject(false);
+			auto*   obj = a_player->GetEquippedObject(a_left);
 			auto*   weap = obj ? obj->As<RE::TESObjectWEAP>() : nullptr;
 			if (c.weaponWeight && weap) {
 				switch (weap->GetWeaponType()) {
@@ -337,11 +383,14 @@ namespace Visual
 			}
 		};
 
-		Pose RestPose(const Config& c)
+		// Lewa ręka = lustrzane odbicie w poziomie (X ujemny).
+		float Side(bool a_left) { return a_left ? -1.0f : 1.0f; }
+
+		Pose RestPose(const Config& c, bool a_left)
 		{
 			const float t = (c.procRestTilt + (g_feel.sprint ? 30.0f : 0.0f)) * kDegToRad;
 			const float drop = g_feel.sprint ? -8.0f : 0.0f;
-			return { { c.procRestX, c.procDistance, c.procRestZ + drop }, Norm({ 0.0f, std::sin(t), std::cos(t) }), { 1.0f, 0.0f, 0.0f } };
+			return { { c.procRestX * Side(a_left), c.procDistance, c.procRestZ + drop }, Norm({ 0.0f, std::sin(t), std::cos(t) }), { 1.0f, 0.0f, 0.0f } };
 		}
 
 		Pose BlockPose(const Config& c)
@@ -351,13 +400,13 @@ namespace Visual
 		}
 
 		// Zamach: broń odciągnięta na okręgu pod kątem a_deg, a_amount 0..1.
-		Pose WindupPose(const Config& c, const Profile& pr, float a_deg, float a_amount)
+		Pose WindupPose(const Config& c, const Profile& pr, float a_deg, float a_amount, bool a_left)
 		{
-			const Pose  rest = RestPose(c);
+			const Pose  rest = RestPose(c, a_left);
 			const float r = a_deg * kDegToRad;
 			const P3    d{ std::cos(r), 0.0f, std::sin(r) };
 			const P3    fwd{ 0.0f, 1.0f, 0.0f };
-			const P3    center{ c.procCenterX, c.procDistance, c.procCenterZ };
+			const P3    center{ c.procCenterX * Side(a_left), c.procDistance, c.procCenterZ };
 
 			Pose p;
 			p.pos = Lerp(rest.pos, Sub(Add(center, Mul(d, c.procRadius * pr.radius)), Mul(fwd, c.procPullBack)), a_amount);
@@ -368,7 +417,7 @@ namespace Visual
 
 		// Cięcie: łuk (wokół "barku") z kąta a_deg przez przód na przeciwną stronę i trochę dalej.
 		// Krzywa czasu: powolny start, maksymalna prędkość w 2/3, ostre wyhamowanie – jak prawdziwy zamach.
-		Pose SwingPose(const Config& c, const Profile& pr, float a_deg, float a_t, bool a_power)
+		Pose SwingPose(const Config& c, const Profile& pr, float a_deg, float a_t, bool a_power, bool a_left)
 		{
 			const float t = std::clamp(a_t, 0.0f, 1.0f);
 			const float shaped = std::pow(t, 1.35f);
@@ -378,7 +427,7 @@ namespace Visual
 			const float r = a_deg * kDegToRad;
 			const P3    d{ std::cos(r), 0.0f, std::sin(r) };
 			const P3    fwd{ 0.0f, 1.0f, 0.0f };
-			const P3    center{ c.procCenterX, c.procDistance, c.procCenterZ };
+			const P3    center{ c.procCenterX * Side(a_left), c.procDistance, c.procCenterZ };
 			const float radius = c.procRadius * pr.radius * (a_power ? 1.15f : 1.0f);
 			const float reach = c.procReach * (a_power ? 1.3f : 1.0f);
 
@@ -390,9 +439,10 @@ namespace Visual
 			return p;
 		}
 
-		Pose TargetPose(RE::PlayerCharacter* a_player, const Config& c, const Profile& pr, float a_delta)
+		Pose TargetPose(RE::PlayerCharacter* a_player, const Config& c, const Profile& pr, float a_delta, WeaponState& g_weap)
 		{
-			const auto& combat = Combat::Get();
+			const bool  a_left = g_weap.left;
+			const auto& combat = Combat::Get(a_left);
 
 			if (combat.StrikeId() != g_weap.seenStrike) {
 				g_weap.seenStrike = combat.StrikeId();
@@ -413,7 +463,7 @@ namespace Visual
 				const float dur = pr.duration * (g_weap.sweepPower ? 1.3f : 1.0f);
 				const float t = g_weap.sweepTime / dur;
 				if (t < 1.0f) {
-					return SwingPose(c, pr, g_weap.sweepAngle, t, g_weap.sweepPower);
+					return SwingPose(c, pr, g_weap.sweepAngle, t, g_weap.sweepPower, a_left);
 				}
 				g_weap.sweeping = false;
 			}
@@ -422,16 +472,25 @@ namespace Visual
 			const float amount = std::sqrt(aim.x * aim.x + aim.y * aim.y);
 			if (amount >= 0.01f) {
 				const float deg = std::atan2(aim.y, aim.x) / kDegToRad;
-				return WindupPose(c, pr, deg, (std::min)(amount, 1.0f));
+				Pose p = WindupPose(c, pr, deg, (std::min)(amount, 1.0f), a_left);
+				if (combat.Charged()) {
+					// naładowany cios mocy: broń odciągnięta mocniej i lekko drży z napięcia
+					const float r = deg * kDegToRad;
+					p.pos = Add(p.pos, Mul({ std::cos(r), -0.6f, std::sin(r) }, 4.0f));
+					p.pos.x += std::sin(g_feel.time * 47.0f) * 0.35f;
+					p.pos.z += std::cos(g_feel.time * 53.0f) * 0.35f;
+				}
+				return p;
 			}
-			if (c.blockPose && a_player->IsBlocking()) {
+			if (c.blockPose && !a_left && a_player->IsBlocking()) {
 				return BlockPose(c);
 			}
-			return RestPose(c);
+			return RestPose(c, a_left);
 		}
 
 		// Dodatkowe przesunięcie: kołysanie przy ruchu, oddech, spóźnienie za kamerą, odbicie po trafieniu.
 		P3 FeelOffset(RE::PlayerCharacter* a_player, const Config& c, const Profile& pr, const RE::NiTransform& a_cam, float a_delta)
+		// Liczone raz na klatkę, wspólne dla obu rąk.
 		{
 			g_feel.time += a_delta;
 			const float k = 1.0f - std::exp(-8.0f * a_delta);
@@ -474,18 +533,28 @@ namespace Visual
 
 			// --- trafienie: hit-stop, odbicie, drżenie kamery ---
 			if (const int hit = g_pendingHit.exchange(0); hit > 0) {
-				// pomiar opóźnienia trafienia względem startu cięcia (do synchronizacji)
-				if (!g_weap.hitMeasured && pr.type >= 0 && pr.type < 16 && !g_weap.sweepPower) {
-					const float d = g_feel.time - g_weap.sweepStartTime;
-					if (d > 0.05f && d < 1.0f) {
-						float& avg = g_hitDelay[pr.type];
-						avg = avg > 0.0f ? avg + (d - avg) * 0.3f : d;
-						logger::debug("Synchronizacja: trafienie po {:.3f} s, średnia dla typu {} = {:.3f} s", d, pr.type, avg);
+				// pomiar opóźnienia trafienia względem startu cięcia (do synchronizacji):
+				// bierzemy rękę, która najświeżej zaczęła cięcie
+				WeaponState* latest = nullptr;
+				for (auto& h : g_hands) {
+					if (!h.hitMeasured && (!latest || h.sweepStartTime > latest->sweepStartTime)) {
+						latest = &h;
 					}
-					g_weap.hitMeasured = true;
+				}
+				if (latest) {
+					const Profile hp = GetProfile(a_player, c, latest->left);
+					if (hp.type >= 0 && hp.type < 16 && !latest->sweepPower) {
+						const float d = g_feel.time - latest->sweepStartTime;
+						if (d > 0.05f && d < 1.0f) {
+							float& avg = g_hitDelay[hp.type];
+							avg = avg > 0.0f ? avg + (d - avg) * 0.3f : d;
+							logger::debug("Synchronizacja: trafienie po {:.3f} s, średnia dla typu {} = {:.3f} s", d, hp.type, avg);
+						}
+					}
+					latest->hitMeasured = true;
 				}
 				const float strength = (hit == 2 ? 1.6f : 1.0f) * pr.recoil;
-				if (g_weap.sweeping) {
+				if (g_hands[0].sweeping || g_hands[1].sweeping) {
 					g_feel.hitStop = c.hitStop * strength;
 				}
 				g_feel.recoil = (std::min)(1.0f, g_feel.recoil + 0.7f * c.hitRecoil * strength);
@@ -497,12 +566,11 @@ namespace Visual
 			off.y -= g_feel.recoil * 6.0f;
 			off.z += g_feel.recoil * 2.0f;
 
-			// podczas cięcia efekty słabsze, żeby nie psuły łuku
-			return g_weap.sweeping ? Mul(off, 0.3f) : off;
+			return off;
 		}
 
 		// Macierz obrotu z bazy (ostrze, płaz) w przestrzeni kamery.
-		RE::NiMatrix3 PoseRotation(const Config& c, const Pose& a_pose)
+		RE::NiMatrix3 PoseRotation(const Config& c, const Pose& a_pose, const WeaponState& g_weap)
 		{
 			// lokalnie (model broni)
 			P3 bl = g_weap.bladeLocal;
@@ -602,43 +670,43 @@ namespace Visual
 			return true;
 		}
 
-		void UpdateProcedural(RE::PlayerCharacter* a_player, RE::NiAVObject* a_root, float a_delta)
+		void UpdateProcedural(RE::PlayerCharacter* a_player, RE::NiAVObject* a_root, float a_delta, WeaponState& g_weap,
+			const RE::NiTransform& cam, const P3& a_feel)
 		{
 			const auto& c = Config::Get();
 
-			RE::NiAVObject* node = a_root ? a_root->GetObjectByName("WEAPON") : nullptr;
+			// prawa broń wisi pod węzłem WEAPON, lewa pod SHIELD
+			RE::NiAVObject* node = a_root ? a_root->GetObjectByName(g_weap.left ? "SHIELD" : "WEAPON") : nullptr;
 			if (node != g_weap.node) {
+				const bool left = g_weap.left;
+				Unpublish(left ? 1 : 0);
 				g_weap = {};
+				g_weap.left = left;
 				g_weap.node = node;
 			}
 			if (!node || !node->parent) {
 				return;
 			}
 
-			if (!(g_weap.applied && Near(node->local, g_weap.written))) {
-				g_weap.base = node->local;
+			if (!g_weap.applied) {
+				g_weap.base = node->local;  // do przywrócenia po wyłączeniu efektu
 			}
 
 			RE::NiAVObject* prevWeapon = g_weap.weaponObj;
-			DetectBlade(node);
+			DetectBlade(g_weap, node);
 			const bool newWeapon = prevWeapon != g_weap.weaponObj;
 
-			RE::NiTransform cam;
-			if (!CameraFrame(a_player, cam)) {
-				return;
-			}
-
-			const Profile pr = GetProfile(a_player, c);
+			const Profile pr = GetProfile(a_player, c, g_weap.left);
 
 			// wygładzona poza
-			const Pose  target = TargetPose(a_player, c, pr, a_delta);
+			const Pose  target = TargetPose(a_player, c, pr, a_delta, g_weap);
 			const float speed = (g_weap.sweeping ? c.procSmoothing * 4.0f : c.procSmoothing * 0.75f) * pr.agility;
 			const float k = 1.0f - std::exp(-speed * a_delta);
 			if (!g_weap.curValid || newWeapon) {
 				g_weap.cur = target;
 				if (c.drawAnimation) {
 					// wyjęcie broni: startuje nisko i z boku, potem "wjeżdża" na miejsce
-					g_weap.cur.pos = Add(target.pos, { 6.0f, -12.0f, -35.0f });
+					g_weap.cur.pos = Add(target.pos, { 6.0f * Side(g_weap.left), -12.0f, -35.0f });
 					g_weap.cur.blade = Norm({ 0.3f, 0.6f, 0.4f });
 				}
 				g_weap.curValid = true;
@@ -648,11 +716,12 @@ namespace Visual
 				g_weap.cur.plane = Norm(Lerp(g_weap.cur.plane, target.plane, k), target.plane);
 			}
 
-			const P3 feel = FeelOffset(a_player, c, pr, cam, a_delta);
+			// podczas cięcia efekty słabsze, żeby nie psuły łuku
+			const P3 feel = g_weap.sweeping ? Mul(a_feel, 0.3f) : a_feel;
 
 			// Transformacja broni w przestrzeni kamery.
 			RE::NiTransform pose;
-			pose.rotate = PoseRotation(c, g_weap.cur);
+			pose.rotate = PoseRotation(c, g_weap.cur, g_weap);
 			P3 pos = Add(g_weap.cur.pos, feel);
 			if (c.procPivotAtCenter && g_weap.bladeKnown) {
 				const float scale = node->world.scale > 1e-4f ? node->world.scale : 1.0f;
@@ -663,49 +732,62 @@ namespace Visual
 
 			const RE::NiTransform desiredWorld = cam * pose;
 
-			// Świat rodzica liczony z korzenia 1. osoby i lokalnych transformacji łańcucha
-			// (lokalne są już z tej klatki animacji, korzeń i kamera z tej samej "starej" klatki,
-			// więc różnica się znosi i broń nie drga przy ruchach ręki).
-			RE::NiTransform chain;
-			bool            reachedRoot = false;
-			for (auto* n = static_cast<RE::NiAVObject*>(node->parent); n; n = n->parent) {
-				if (n == a_root) {
-					reachedRoot = true;
-					break;
-				}
-				chain = n->local * chain;
-			}
-			const RE::NiTransform parentWorld = reachedRoot ? a_root->world * chain : node->parent->world;
+			// Kamera i korzeń 1. osoby są tu z tej samej (poprzedniej) klatki, więc ich
+			// wzajemne położenie jest spójne. W UpdateDownwardPass przemnażamy przez ŚWIEŻY
+			// "world" korzenia – broń trzyma się kamery bez opóźnienia i drgań.
+			const RE::NiTransform rel = a_root->world.Invert() * desiredWorld;
+			Publish(g_weap.left ? 1 : 0, node, a_root, rel);
 
-			RE::NiTransform local = parentWorld.Invert() * desiredWorld;
-			local.scale = g_weap.base.scale;
-
+			// Zapas: ustaw też od razu (gdyby węzeł broni nie przechodził przez hook NiNode).
+			RE::NiTransform local = node->parent->world.Invert() * desiredWorld;
+			local.scale = node->local.scale;
 			node->local = local;
-			g_weap.written = local;
 			g_weap.applied = true;
 		}
 
 		void OnFrame(RE::PlayerCharacter* a_player, float a_delta)
 		{
 			CheckLiveReload(a_delta);
-			Combat::Get().Update(a_delta);
+			Combat::Get(false).Update(a_delta);
+			Combat::Get(true).Update(a_delta);
+
+			g_hands[1].left = true;
 
 			const auto&     cfg = Config::Get();
 			auto*           camera = RE::PlayerCamera::GetSingleton();
 			const bool      firstPerson = camera && camera->IsInFirstPerson();
 			RE::NiAVObject* root = a_player->Get3D(true);
-			const bool      meleeReady = Combat::MeleeReady();
 
-			g_proceduralActive = cfg.enabled && cfg.procEnabled && firstPerson && meleeReady && root;
+			bool meleeAny = false;
+			for (int h = 0; h < 2; ++h) {
+				const bool melee = Combat::MeleeReady(h == 1);
+				meleeAny = meleeAny || melee;
+				g_procActive[h] = cfg.enabled && cfg.procEnabled && firstPerson && melee && root;
+			}
 
+			const bool rangedReady = cfg.hideArmsRanged &&
+			                         (Combat::CurrentRanged(false) != RangedKind::None || Combat::CurrentRanged(true) != RangedKind::None ||
+										 Combat::ShieldReady());
 			const bool hide = cfg.enabled && firstPerson &&
-			                  (g_proceduralActive || (cfg.hideArms && (!cfg.hideArmsOnlyWhenDrawn || meleeReady)));
-			UpdateArms(root, hide);
+			                  (g_procActive[0] || g_procActive[1] ||
+								  (cfg.hideArms && (!cfg.hideArmsOnlyWhenDrawn || meleeAny || rangedReady)));
+			UpdateArms(root, hide, rangedReady && !meleeAny);
 
-			if (g_proceduralActive) {
-				UpdateProcedural(a_player, root, a_delta);
-			} else if (g_weap.applied || g_weap.curValid) {
-				ReleaseWeapon();
+			RE::NiTransform cam;
+			const bool      haveCam = (g_procActive[0] || g_procActive[1]) && CameraFrame(a_player, cam);
+			P3              feel{};
+			if (haveCam) {
+				const bool primaryLeft = !g_procActive[0];
+				feel = FeelOffset(a_player, cfg, GetProfile(a_player, cfg, primaryLeft), cam, a_delta);
+			}
+
+			for (int h = 0; h < 2; ++h) {
+				auto& w = g_hands[h];
+				if (g_procActive[h] && haveCam) {
+					UpdateProcedural(a_player, root, a_delta, w, cam, feel);
+				} else if (w.applied || w.curValid) {
+					ReleaseWeapon(w);
+				}
 			}
 		}
 
@@ -720,9 +802,33 @@ namespace Visual
 		}
 	}
 
-	bool ProceduralActive()
+	bool ProceduralActive(bool a_left)
 	{
-		return g_proceduralActive;
+		return g_procActive[a_left ? 1 : 0];
+	}
+
+	namespace
+	{
+		using Pass_t = void(RE::NiNode*, RE::NiUpdateData&, std::uint32_t);
+		Pass_t* _Downward = nullptr;
+		Pass_t* _Selected = nullptr;
+		Pass_t* _Rigid = nullptr;
+
+		void Downward(RE::NiNode* a_this, RE::NiUpdateData& a_data, std::uint32_t a_arg)
+		{
+			ApplyOverride(a_this);
+			_Downward(a_this, a_data, a_arg);
+		}
+		void Selected(RE::NiNode* a_this, RE::NiUpdateData& a_data, std::uint32_t a_arg)
+		{
+			ApplyOverride(a_this);
+			_Selected(a_this, a_data, a_arg);
+		}
+		void Rigid(RE::NiNode* a_this, RE::NiUpdateData& a_data, std::uint32_t a_arg)
+		{
+			ApplyOverride(a_this);
+			_Rigid(a_this, a_data, a_arg);
+		}
 	}
 
 	void Install()
@@ -730,6 +836,13 @@ namespace Visual
 		REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_PlayerCharacter[0] };
 		_Update = reinterpret_cast<Update_t*>(vtbl.write_vfunc(0xAD, &PlayerUpdate));
 		logger::info("Hook PlayerCharacter::Update zainstalowany (animacja proceduralna)");
+
+		// NiNode: 2C UpdateDownwardPass, 2D UpdateSelectedDownwardPass, 2E UpdateRigidDownwardPass
+		REL::Relocation<std::uintptr_t> nodeVtbl{ RE::VTABLE_NiNode[0] };
+		_Downward = reinterpret_cast<Pass_t*>(nodeVtbl.write_vfunc(0x2C, &Downward));
+		_Selected = reinterpret_cast<Pass_t*>(nodeVtbl.write_vfunc(0x2D, &Selected));
+		_Rigid = reinterpret_cast<Pass_t*>(nodeVtbl.write_vfunc(0x2E, &Rigid));
+		logger::info("Hooki NiNode (pozycja broni przed renderem) zainstalowane");
 	}
 
 	void RegisterEvents()
