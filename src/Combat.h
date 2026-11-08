@@ -152,6 +152,7 @@ private:
 	float             _angle = 0.0f;    // aktualny kąt zamachu (stopnie)
 	int               _sector = 0;      // aktualny sektor 0..15
 	Clock::time_point _pressTime{};
+	Clock::time_point _lastMouse{};     // do liczenia prędkości ruchu
 	Clock::time_point _lastStrike{};
 	bool              _struckOnce = false;
 	Clock::time_point _armStart{};      // kiedy zamach został uzbrojony (do ciosu mocy)

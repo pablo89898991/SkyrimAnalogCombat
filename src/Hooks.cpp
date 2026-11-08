@@ -85,6 +85,33 @@ namespace Hooks
 			}
 		}
 
+		// ---- ActivateHandler::ProcessButton ----
+		// Przytrzymanie "Aktywuj" (E) normalnie podnosi przedmiot/ciało. Wyłączamy to:
+		// gra nie widzi trzymania, więc podnoszenie zostaje tylko pod akcją "Grab"
+		// (do przypisania w ustawieniach sterowania).
+		using ActivateButton_t = void(RE::ActivateHandler*, RE::ButtonEvent*, RE::PlayerControlsData*);
+		ActivateButton_t* _ActivateProcessButton = nullptr;
+
+		void ActivateProcessButton(RE::ActivateHandler* a_this, RE::ButtonEvent* a_event, RE::PlayerControlsData* a_data)
+		{
+			auto* ue = RE::UserEvents::GetSingleton();
+			if (a_event && ue && Config::Get().enabled && Config::Get().disableHoldToGrab && a_event->QUserEvent() == ue->activate) {
+				if (a_event->IsHeld()) {
+					return;  // trzymanie E – ignorujemy (bez podnoszenia)
+				}
+				if (a_event->IsUp()) {
+					// puszczenie: gra widzi je jak po krótkim kliknięciu
+					auto&       rt = a_event->GetRuntimeData();
+					const float held = rt.heldDownSecs;
+					rt.heldDownSecs = (std::min)(held, 0.05f);
+					_ActivateProcessButton(a_this, a_event, a_data);
+					rt.heldDownSecs = held;
+					return;
+				}
+			}
+			_ActivateProcessButton(a_this, a_event, a_data);
+		}
+
 		// ---- LookHandler::ProcessMouseMove ----
 		using ProcessMouseMove_t = void(RE::LookHandler*, RE::MouseMoveEvent*, RE::PlayerControlsData*);
 		ProcessMouseMove_t* _LookProcessMouseMove = nullptr;
@@ -133,6 +160,8 @@ namespace Hooks
 	{
 		REL::Relocation<std::uintptr_t> attackVtbl{ RE::VTABLE_AttackBlockHandler[0] };
 		REL::Relocation<std::uintptr_t> lookVtbl{ RE::VTABLE_LookHandler[0] };
+		REL::Relocation<std::uintptr_t> activateVtbl{ RE::VTABLE_ActivateHandler[0] };
+		_ActivateProcessButton = reinterpret_cast<ActivateButton_t*>(activateVtbl.write_vfunc(Idx(0x4), &ActivateProcessButton));
 
 		_AttackProcessButton = reinterpret_cast<ProcessButton_t*>(attackVtbl.write_vfunc(Idx(0x4), &AttackProcessButton));
 		_LookProcessMouseMove = reinterpret_cast<ProcessMouseMove_t*>(lookVtbl.write_vfunc(Idx(0x3), &LookProcessMouseMove));

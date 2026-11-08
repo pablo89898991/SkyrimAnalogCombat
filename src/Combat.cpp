@@ -647,15 +647,24 @@ bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 		_movedAtAll = true;
 	}
 
+	// czas od poprzedniego ruchu (do prędkości szarpnięcia)
+	const auto  now = Clock::now();
+	const float dt = std::clamp(std::chrono::duration<float>(now - _lastMouse).count(), 0.001f, 0.1f);
+	_lastMouse = now;
+
 	if (InCooldown()) {
 		return cfg.freezeCamera;  // ruch "dokończenia" ciosu nie uzbraja kolejnego zamachu
 	}
+
+	// Kolejny zamach w serii wymaga wyraźniejszego ruchu – naturalne "odbicie" ręki po ciosie
+	// nie uzbraja nowego cięcia.
+	const float windupNeeded = cfg.mouseWindupThreshold * (_struckOnce ? cfg.chainWindupMult : 1.0f);
 
 	switch (_state) {
 	case State::Charging:
 		_windup.x += d.x;
 		_windup.y += d.y;
-		if (_windup.Len() >= cfg.mouseWindupThreshold) {
+		if (_windup.Len() >= windupNeeded) {
 			_reverse = 0.0f;
 			Arm(AngleDeg(_windup));
 		}
@@ -670,10 +679,20 @@ bool Combat::OnMouseMove(std::int32_t a_dx, std::int32_t a_dy)
 				_windup.y += d.y;
 				_reverse = (std::max)(0.0f, _reverse - along);
 				Arm(AngleDeg(_windup));
-			} else {
+			} else if (-along / dt >= cfg.strikeMinSpeed) {
+				// szybkie szarpnięcie w drugą stronę – liczy się do ciosu
 				_reverse += -along;
 				if (_reverse >= cfg.mouseStrikeThreshold) {
 					Strike();
+				}
+			} else {
+				// powolny ruch wstecz to nie cios, tylko cofanie zamachu
+				_windup.x += d.x;
+				_windup.y += d.y;
+				_reverse = (std::max)(0.0f, _reverse + along);  // along < 0 -> zmniejsza
+				if (_windup.Len() < windupNeeded * 0.5f) {
+					_state = State::Charging;  // zamach cofnięty prawie do środka
+					logger::debug("Gest: zamach cofnięty");
 				}
 			}
 		}

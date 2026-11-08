@@ -23,7 +23,9 @@ struct Config
 
 	// [Mouse]
 	float mouseWindupThreshold = 80.0f;
-	float mouseStrikeThreshold = 50.0f;
+	float mouseStrikeThreshold = 70.0f;
+	float strikeMinSpeed = 900.0f;   // min. prędkość szarpnięcia (jednostki/s) – wolny ruch wstecz nie tnie
+	float chainWindupMult = 1.6f;    // kolejny zamach w serii wymaga tyle razy większego ruchu
 	float mouseSensitivity = 1.0f;
 	bool  invertY = false;
 
@@ -106,6 +108,9 @@ struct Config
 	bool        procFlipBlade = false;    // gdy broń jest odwrócona (rękojeść na zewnątrz)
 	bool        procPivotAtCenter = true; // obracaj wokół środka broni (efekt "latania")
 	bool        liveReload = true;
+
+	// [Activate]
+	bool        disableHoldToGrab = true;  // przytrzymanie E nie podnosi przedmiotów – służy do tego klawisz "Grab"
 
 	// [Feel] – "naturalność" ruchu
 	bool  weaponWeight = true;

@@ -106,6 +106,8 @@ void Config::Load()
 
 	r.Get("mouse.windupthreshold", mouseWindupThreshold);
 	r.Get("mouse.strikethreshold", mouseStrikeThreshold);
+	r.Get("mouse.strikeminspeed", strikeMinSpeed);
+	r.Get("mouse.chainwindupmult", chainWindupMult);
 	r.Get("mouse.sensitivity", mouseSensitivity);
 	r.Get("mouse.inverty", invertY);
 
@@ -148,6 +150,7 @@ void Config::Load()
 	r.Get("floatingweapon.hidearms", hideArms);
 	r.Get("floatingweapon.hidearmsonlywhendrawn", hideArmsOnlyWhenDrawn);
 	r.Get("general.livereload", liveReload);
+	r.Get("activate.disableholdtograb", disableHoldToGrab);
 
 	r.Get("lefthand.enabled", leftEnabled);
 	r.Get("lefthand.attackevent", leftAttackEvent);
