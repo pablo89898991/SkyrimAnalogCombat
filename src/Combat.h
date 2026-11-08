@@ -48,6 +48,12 @@ public:
 	static bool OnShieldMotion(std::int32_t a_dx, std::int32_t a_dy);
 	static bool OnShieldStick(float a_x, float a_y);
 
+	// Po każdym geście kamera przez chwilę ignoruje ruch (końcówka szarpnięcia/pchnięcia),
+	// a przy padzie – dopóki drążek nie wróci do środka.
+	static void StartSettle(bool a_stick);
+	static bool SwallowMouse();
+	static bool SwallowStick(float a_x, float a_y);
+
 	[[nodiscard]] bool IsLeft() const noexcept { return _left; }
 
 	// Każda funkcja zwraca true, jeśli zdarzenie ma zostać "połknięte" (nie trafi do gry).
@@ -95,6 +101,8 @@ private:
 
 	const bool             _left;
 	static inline Combat*  s_active = nullptr;
+	static inline std::chrono::steady_clock::time_point s_settleUntil{};
+	static inline bool                                  s_stickLatch = false;
 
 	enum class State : std::uint8_t
 	{

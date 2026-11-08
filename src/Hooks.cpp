@@ -92,14 +92,17 @@ namespace Hooks
 		void LookProcessMouseMove(RE::LookHandler* a_this, RE::MouseMoveEvent* a_event, RE::PlayerControlsData* a_data)
 		{
 			if (a_event) {
-				bool swallow = false;
-				if (auto* hand = Combat::ActiveHand()) {
-					swallow = hand->OnMouseMove(a_event->mouseInputX, a_event->mouseInputY);
+				// 1) gest w toku (np. kolejny zamach w serii) – obsługuje go ręka
+				if (auto* hand = Combat::ActiveHand(); hand && hand->OnMouseMove(a_event->mouseInputX, a_event->mouseInputY)) {
+					return;  // kamera zamrożona podczas gestu
 				}
-				if (!swallow) {
-					Combat::OnShieldMotion(a_event->mouseInputX, a_event->mouseInputY);
-				} else {
-					return;  // kamera zamrożona podczas zamachu
+				// 2) chwilę po geście – połknij końcówkę ruchu
+				if (Combat::SwallowMouse()) {
+					return;
+				}
+				// 3) tarcza: szybkie pchnięcie w górę podczas bloku
+				if (Combat::OnShieldMotion(a_event->mouseInputX, a_event->mouseInputY)) {
+					return;
 				}
 			}
 			_LookProcessMouseMove(a_this, a_event, a_data);
@@ -112,14 +115,15 @@ namespace Hooks
 		void LookProcessThumbstick(RE::LookHandler* a_this, RE::ThumbstickEvent* a_event, RE::PlayerControlsData* a_data)
 		{
 			if (a_event && a_event->IsRight()) {
-				bool swallow = false;
-				if (auto* hand = Combat::ActiveHand()) {
-					swallow = hand->OnRightStick(a_event->xValue, a_event->yValue);
-				}
-				if (swallow) {
+				if (auto* hand = Combat::ActiveHand(); hand && hand->OnRightStick(a_event->xValue, a_event->yValue)) {
 					return;
 				}
-				Combat::OnShieldStick(a_event->xValue, a_event->yValue);
+				if (Combat::SwallowStick(a_event->xValue, a_event->yValue)) {
+					return;  // po geście: dopóki drążek nie wróci do środka
+				}
+				if (Combat::OnShieldStick(a_event->xValue, a_event->yValue)) {
+					return;
+				}
 			}
 			_LookProcessThumbstick(a_this, a_event, a_data);
 		}

@@ -116,6 +116,7 @@ void Config::Load()
 	r.Get("timing.strikecooldown", strikeCooldown);
 	r.Get("timing.tapmaxtime", tapMaxTime);
 	r.Get("timing.strikebuffertime", strikeBufferTime);
+	r.Get("timing.gesturesettle", gestureSettle);
 
 	r.Get("animations.windupright", windupRight);
 	r.Get("animations.windupup", windupUp);
@@ -158,6 +159,8 @@ void Config::Load()
 	r.Get("shield.flickwindow", bashWindow);
 	r.Get("shield.cooldown", bashCooldown);
 	r.Get("shield.stickpush", bashStick);
+	r.Get("shield.swallowspeed", bashSwallowSpeed);
+	r.Get("shield.freezecamerawhileblocking", freezeCameraWhileBlocking);
 	bashWindow = (std::max)(0.02f, bashWindow);
 
 	r.Get("ranged.enabled", rangedEnabled);

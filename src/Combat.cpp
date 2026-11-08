@@ -167,6 +167,7 @@ namespace
 		}
 		g_shield.lastBash = now;
 		g_shield.accum = 0.0f;
+		Combat::StartSettle(std::string_view(a_src) == "pad");
 		const bool ok = player->NotifyAnimationGraph(cfg.bashEvent.c_str());
 		logger::debug("Tarcza: uderzenie ({}) -> '{}' ({})", a_src, cfg.bashEvent, ok ? "ok" : "odrzucony");
 	}
@@ -186,13 +187,19 @@ bool Combat::OnShieldMotion(std::int32_t, std::int32_t a_dy)
 
 	g_shield.accum *= std::exp(-dt / cfg.bashWindow);  // stary ruch "wygasa"
 	const float up = (cfg.invertY ? a_dy : -a_dy) * cfg.mouseSensitivity;
+	bool        swallow = cfg.freezeCameraWhileBlocking;
 	if (up > 0.0f) {
 		g_shield.accum += up;
+		// szybkie pchnięcie w górę to gest, a nie rozglądanie się – nie ruszaj nim kamery
+		if (dt > 1e-4f && up / dt >= cfg.bashSwallowSpeed) {
+			swallow = true;
+		}
 	}
 	if (g_shield.accum >= cfg.bashFlick) {
 		Bash("mysz");
+		swallow = true;
 	}
-	return false;  // kamera zostaje wolna – blokujesz i rozglądasz się normalnie
+	return swallow;
 }
 
 bool Combat::OnShieldStick(float, float a_y)
@@ -206,10 +213,37 @@ bool Combat::OnShieldStick(float, float a_y)
 	if (a_y >= cfg.bashStick && !g_shield.stickLatched) {
 		g_shield.stickLatched = true;
 		Bash("pad");
-	} else if (a_y < 0.3f) {
+		return true;
+	}
+	if (a_y < 0.3f) {
 		g_shield.stickLatched = false;
 	}
-	return false;
+	return cfg.freezeCameraWhileBlocking;
+}
+
+void Combat::StartSettle(bool a_stick)
+{
+	s_settleUntil = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(Config::Get().gestureSettle));
+	if (a_stick) {
+		s_stickLatch = true;
+	}
+}
+
+bool Combat::SwallowMouse()
+{
+	return Clock::now() < s_settleUntil;
+}
+
+bool Combat::SwallowStick(float a_x, float a_y)
+{
+	if (s_stickLatch) {
+		if (std::abs(a_x) < 0.3f && std::abs(a_y) < 0.3f) {
+			s_stickLatch = false;  // drążek wrócił do środka
+		} else {
+			return true;
+		}
+	}
+	return Clock::now() < s_settleUntil;
 }
 
 bool Combat::Charged() const
@@ -300,6 +334,7 @@ void Combat::Strike()
 		ev = HandFallback();
 	}
 
+	StartSettle(_gamepad);
 	Dispatch(ev, _angle, std::string(_left ? "[L] " : "[P] ") + "cios z " + Describe(_sector) + (procedural ? " [proceduralny]" : ""));
 
 	AfterStrike();
@@ -490,6 +525,7 @@ bool Combat::OnRangedMotion(float a_up, bool a_stick)
 
 	const auto fire = [&](const char* a_what) {
 		_rangedFire = true;
+		StartSettle(a_stick);
 		logger::debug("Dystans: {}", a_what);
 	};
 

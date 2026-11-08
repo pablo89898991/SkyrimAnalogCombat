@@ -35,7 +35,8 @@ struct Config
 	// [Timing]
 	float strikeCooldown = 0.30f;
 	float tapMaxTime = 0.25f;
-	float strikeBufferTime = 0.8f;  // s, jak długo czekać, aż gra przyjmie zbuforowany cios
+	float strikeBufferTime = 0.8f;
+	float gestureSettle = 0.25f;    // s po geście, przez które kamera ignoruje "końcówkę" ruchu  // s, jak długo czekać, aż gra przyjmie zbuforowany cios
 
 	// [Animations]
 	// Animacje "bazowe" dla 4 głównych kierunków – używane, gdy dany kąt nie ma własnej animacji.
@@ -71,6 +72,8 @@ struct Config
 	float       bashWindow = 0.12f;    // s – okno, w którym liczy się ruch
 	float       bashCooldown = 0.8f;   // s między uderzeniami
 	float       bashStick = 0.85f;     // pad: wychylenie drążka w górę
+	float       bashSwallowSpeed = 1500.0f;  // szybszy ruch w górę podczas bloku nie rusza kamerą
+	bool        freezeCameraWhileBlocking = false;
 
 	// [Ranged] – łuk, kusza, kostur
 	bool  rangedEnabled = true;
