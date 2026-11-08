@@ -190,11 +190,16 @@ namespace Hooks
 
 			if (a_event->IsUp()) {
 				if (g_grab.injected) {
-					// puszczenie po długim trzymaniu -> upuszczenie (bez aktywacji)
+					// zamknij "przytrzymanie" po stronie gry (bez aktywacji)...
 					SendActivate(a_event, 0.0f, a_event->HeldDuration() + kGrabBoost);
-					logger::debug("Podnoszenie: upuszczenie");
+					// ...i od razu upuść – w grze chwyt działa jak przełącznik (upuszcza dopiero
+					// kolejne wciśnięcie), a my chcemy upuszczenia w chwili puszczenia klawisza.
+					if (auto* player = RE::PlayerCharacter::GetSingleton(); player && player->IsGrabbing()) {
+						player->EndGrabObject();
+						logger::debug("Podnoszenie: upuszczenie");
+					}
 				}
-				g_grab.injected = false;  // krótkie kliknięcie: nic
+				g_grab.injected = false;
 			}
 		}
 
