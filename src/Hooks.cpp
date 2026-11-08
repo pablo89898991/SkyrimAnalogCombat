@@ -117,28 +117,85 @@ namespace Hooks
 		// Gra (PC) nie ma osobnej akcji podnoszenia w menu sterowania – podnoszenie to
 		// "przytrzymane E". Klawisz z [Activate] GrabKey udaje przed grą przytrzymane E
 		// (tylko dla podnoszenia), więc działa jej własny mechanizm chwytania.
+		// GrabKey działa WYŁĄCZNIE jako "podnieś":
+		//  - wciśnięcie: natychmiastowy chwyt (gra dostaje wciśnięcie "Aktywuj" i od razu
+		//    "długie przytrzymanie", więc zamiast aktywacji od razu chwyta),
+		//  - trzymanie: obiekt zostaje w rękach,
+		//  - puszczenie: upuszczenie (bez aktywacji – nie zabiera przedmiotu, nie otwiera drzwi).
+		//  (GrabHoldTime > 0 = chwyt dopiero po tylu sekundach trzymania)
+		constexpr float kGrabBoost = 2.0f;  // sztuczne wydłużenie czasu trzymania widzianego przez grę
+
+		struct GrabState
+		{
+			bool injected = false;  // gra dostała już wciśnięcie
+		} g_grab;
+
+		void SendActivate(RE::ButtonEvent* a_event, float a_value, float a_held)
+		{
+			auto* controls = RE::PlayerControls::GetSingleton();
+			auto* ue = RE::UserEvents::GetSingleton();
+			auto* handler = controls ? controls->GetActivateHandler() : nullptr;
+			if (!handler || !ue || !_ActivateProcessButton) {
+				return;
+			}
+			auto&                    rt = a_event->GetRuntimeData();
+			const float              savedValue = rt.value, savedHeld = rt.heldDownSecs;
+			const RE::BSFixedString  savedEvent = a_event->QUserEvent();
+			a_event->SetUserEvent(ue->activate);
+			rt.value = a_value;
+			rt.heldDownSecs = a_held;
+			g_grabInjecting = true;
+			_ActivateProcessButton(handler, a_event, &controls->data);
+			g_grabInjecting = false;
+			rt.value = savedValue;
+			rt.heldDownSecs = savedHeld;
+			a_event->SetUserEvent(savedEvent);
+		}
+
 		void HandleGrabKey(RE::ButtonEvent* a_event)
 		{
 			const auto& cfg = Config::Get();
 			auto*       ui = RE::UI::GetSingleton();
-			auto*       controls = RE::PlayerControls::GetSingleton();
-			auto*       ue = RE::UserEvents::GetSingleton();
 			auto*       cmap = RE::ControlMap::GetSingleton();
-			if (!cfg.enabled || !cfg.disableHoldToGrab || cfg.grabCode == 0 || !ui || ui->GameIsPaused() || !controls || !ue ||
-				!_ActivateProcessButton || (cmap && !cmap->IsActivateControlsEnabled())) {
-				return;
-			}
-			auto* handler = controls->GetActivateHandler();
-			if (!handler) {
+			const bool  usable = cfg.enabled && cfg.disableHoldToGrab && cfg.grabCode != 0 && ui && !ui->GameIsPaused() &&
+			                    !(cmap && !cmap->IsActivateControlsEnabled());
+
+			if (a_event->IsDown()) {
+				g_grab.injected = false;
+				if (usable && cfg.grabHoldTime <= 0.0f) {
+					// natychmiastowy chwyt: w tej samej klatce wciśnięcie + "długie trzymanie"
+					SendActivate(a_event, 1.0f, 0.0f);
+					SendActivate(a_event, 1.0f, kGrabBoost);
+					g_grab.injected = true;
+					logger::debug("Podnoszenie: chwyt");
+				}
 				return;
 			}
 
-			const RE::BSFixedString saved = a_event->QUserEvent();
-			a_event->SetUserEvent(ue->activate);
-			g_grabInjecting = true;
-			_ActivateProcessButton(handler, a_event, &controls->data);
-			g_grabInjecting = false;
-			a_event->SetUserEvent(saved);
+			if (a_event->IsHeld()) {
+				if (!usable) {
+					return;
+				}
+				if (!g_grab.injected && a_event->HeldDuration() >= cfg.grabHoldTime) {
+					SendActivate(a_event, 1.0f, 0.0f);  // wciśnięcie "Aktywuj"
+					g_grab.injected = true;
+					logger::debug("Podnoszenie: chwyt");
+				}
+				if (g_grab.injected) {
+					// trzymanie widziane przez grę jako długie -> chwyt, nie aktywacja
+					SendActivate(a_event, 1.0f, a_event->HeldDuration() + kGrabBoost);
+				}
+				return;
+			}
+
+			if (a_event->IsUp()) {
+				if (g_grab.injected) {
+					// puszczenie po długim trzymaniu -> upuszczenie (bez aktywacji)
+					SendActivate(a_event, 0.0f, a_event->HeldDuration() + kGrabBoost);
+					logger::debug("Podnoszenie: upuszczenie");
+				}
+				g_grab.injected = false;  // krótkie kliknięcie: nic
+			}
 		}
 
 		class GrabKeySink : public RE::BSTEventSink<RE::InputEvent*>

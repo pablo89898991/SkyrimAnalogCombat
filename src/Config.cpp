@@ -157,6 +157,8 @@ void Config::Load()
 	r.Get("general.livereload", liveReload);
 	r.Get("activate.disableholdtograb", disableHoldToGrab);
 	r.Get("activate.grabkey", grabKey);
+	r.Get("activate.grabholdtime", grabHoldTime);
+	grabHoldTime = std::clamp(grabHoldTime, 0.0f, 2.0f);
 	{
 		// nazwa klawisza -> kod DirectInput (klawiatura) albo numer przycisku myszy
 		static const std::unordered_map<std::string, std::uint32_t> keys{

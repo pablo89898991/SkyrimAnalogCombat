@@ -114,6 +114,7 @@ struct Config
 
 	// [Activate]
 	bool          disableHoldToGrab = true;  // przytrzymanie E nie podnosi przedmiotów
+	float         grabHoldTime = 0.0f;       // s trzymania GrabKey przed chwytem (0 = od razu)
 	std::string   grabKey = "G";             // własny klawisz podnoszenia (litera, cyfra, F1-F12, Mouse3-Mouse8 lub kod DIK)
 	std::uint32_t grabCode = 0x22;           // wyliczone z grabKey
 	bool          grabIsMouse = false;
